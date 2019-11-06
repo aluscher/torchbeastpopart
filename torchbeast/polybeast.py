@@ -26,12 +26,16 @@ import traceback
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
 import nest
+import numpy as np
+
 import torch
 from libtorchbeast import actorpool
 from torch import nn
 from torch.nn import functional as F
-from torchbeast.core import file_writer
+
+from torchbeast.core import file_writer, environment
 from torchbeast.core import vtrace
+from torchbeast import atari_wrappers
 
 
 # yapf: disable
@@ -41,7 +45,7 @@ parser.add_argument("--pipes_basename", default="unix:/tmp/polybeast",
                     help="Basename for the pipes for inter-process communication. "
                     "Has to be of the type unix:/some/path.")
 parser.add_argument("--mode", default="train",
-                    choices=["train", "test", "test_render"],
+                    choices=["train", "test", "test_render", "debug"],
                     help="Training or test mode.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
@@ -106,6 +110,11 @@ parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
 parser.add_argument("--write_profiler_trace", action="store_true",
                     help="Collect and write a profiler trace "
                     "for chrome://tracing/.")
+
+# Test settings.
+parser.add_argument("--num_episodes", default=100, type=int,
+                    help="Number of episodes for Testing.")
+
 # yapf: enable
 
 
@@ -137,6 +146,16 @@ def compute_policy_gradient_loss(logits, actions, advantages):
     cross_entropy = cross_entropy.view_as(advantages)
     return torch.sum(cross_entropy * advantages.detach())
 
+
+def create_env(flags):
+    return atari_wrappers.wrap_pytorch(
+        atari_wrappers.wrap_deepmind(
+            atari_wrappers.make_atari(flags.env),
+            clip_rewards=False,
+            frame_stack=True,
+            scale=False,
+        )
+    )
 
 class Net(nn.Module):
     def __init__(self, num_actions, use_lstm=False):
@@ -409,7 +428,7 @@ def train(flags):
     if not flags.disable_cuda and torch.cuda.is_available():
         logging.info("Using CUDA.")
         flags.learner_device = torch.device("cuda:0")
-        flags.actor_device = torch.device("cuda:1")
+        flags.actor_device = torch.device("cuda:0")
     else:
         logging.info("Not using CUDA.")
         flags.learner_device = torch.device("cpu")
@@ -601,14 +620,85 @@ def train(flags):
 
 
 def test(flags):
-    raise NotImplementedError()
+
+    if flags.xpid is None:
+        checkpointpath = "./latest/model.tar"
+    else:
+        checkpointpath = os.path.expandvars(
+            os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
+        )
+
+    gym_env = create_env(flags)
+    env = environment.Environment(gym_env)
+    model = Net(gym_env.action_space.n, flags.use_lstm)
+    model.eval()
+    checkpoint = torch.load(checkpointpath, map_location="cpu")
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    observation = env.initial()
+    returns = []
+
+    with torch.no_grad():
+
+        i = 0
+        while len(returns) < flags.num_episodes:
+            if flags.mode == "test_render":
+                time.sleep(0.05)
+                env.gym_env.render()
+            agent_outputs = model(observation, torch.tensor)
+            policy_outputs, _ = agent_outputs
+            observation = env.step(policy_outputs[0])
+            np.save("./pictures/test.frame." + str(i), observation["frame"].squeeze())
+            if observation["done"].item():
+                returns.append(observation["episode_return"].item())
+                logging.info(
+                    "Episode ended after %d steps. Return: %.1f",
+                    observation["episode_step"].item(),
+                    observation["episode_return"].item(),
+                )
+            i = i + 1
+
+    env.close()
+    logging.info(
+        "Average returns over %i steps: %.1f", flags.num_episodes, sum(returns) / len(returns)
+    )
+
+
+def debug(flags):
+    envs = np.array(["AirRaidNoFrameskip-v4","AlienNoFrameskip-v4","AmidarNoFrameskip-v4","AssaultNoFrameskip-v4",
+                     "AsterixNoFrameskip-v4","AsteroidsNoFrameskip-v4","AtlantisNoFrameskip-v4",
+                     "BankHeistNoFrameskip-v4","BattleZoneNoFrameskip-v4","BeamRiderNoFrameskip-v4",
+                     "BerzerkNoFrameskip-v4","BowlingNoFrameskip-v4","BoxingNoFrameskip-v4","BreakoutNoFrameskip-v4",
+                     "CarnivalNoFrameskip-v4","CentipedeNoFrameskip-v4","ChopperCommandNoFrameskip-v4",
+                     "CrazyClimberNoFrameskip-v4","DemonAttackNoFrameskip-v4","DoubleDunkNoFrameskip-v4",
+                     "ElevatorActionNoFrameskip-v4","EnduroNoFrameskip-v4","FishingDerbyNoFrameskip-v4",
+                     "FreewayNoFrameskip-v4","FrostbiteNoFrameskip-v4","GopherNoFrameskip-v4","GravitarNoFrameskip-v4",
+                     "IceHockeyNoFrameskip-v4","JamesbondNoFrameskip-v4","JourneyEscapeNoFrameskip-v4",
+                     "KangarooNoFrameskip-v4","KrullNoFrameskip-v4","KungFuMasterNoFrameskip-v4",
+                     "MontezumaRevengeNoFrameskip-v4","MsPacmanNoFrameskip-v4","NameThisGameNoFrameskip-v4",
+                     "PhoenixNoFrameskip-v4","PitfallNoFrameskip-v4","PongNoFrameskip-v4","PooyanNoFrameskip-v4",
+                     "PrivateEyeNoFrameskip-v4","QbertNoFrameskip-v4","RiverraidNoFrameskip-v4",
+                     "RoadRunnerNoFrameskip-v4","RobotankNoFrameskip-v4","SeaquestNoFrameskip-v4",
+                     "SkiingNoFrameskip-v4","SolarisNoFrameskip-v4","SpaceInvadersNoFrameskip-v4",
+                     "StarGunnerNoFrameskip-v4","TennisNoFrameskip-v4","TimePilotNoFrameskip-v4",
+                     "TutankhamNoFrameskip-v4","UpNDownNoFrameskip-v4","VentureNoFrameskip-v4",
+                     "VideoPinballNoFrameskip-v4","WizardOfWorNoFrameskip-v4","YarsRevengeNoFrameskip-v4",
+                     "ZaxxonNoFrameskip-v4"])
+
+    l = envs.shape[0]
+    for i in range(envs.shape[0]):
+        env = create_env(envs[i])
+        print(env)
+        print(env.action_space)
+        print(env.get_action_meanings())
+    env.close()
 
 
 def main(flags):
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
-    if flags.start_servers:
+    if flags.start_servers and flags.mode == "train":
         command = [
             "python",
             "-m",
@@ -631,10 +721,14 @@ def main(flags):
             os.system("gzip %s" % filename)
         else:
             train(flags)
-    else:
+
+    if flags.mode == "test" or flags.mode == "test_render":
         test(flags)
 
-    if flags.start_servers:
+    if flags.mode == "debug":
+        debug(flags)
+
+    if flags.start_servers and flags.mode == "train":
         # Send Ctrl-c to servers.
         server_proc.send_signal(signal.SIGINT)
 
