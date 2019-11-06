@@ -648,7 +648,6 @@ def test(flags):
             agent_outputs = model(observation, torch.tensor)
             policy_outputs, _ = agent_outputs
             observation = env.step(policy_outputs[0])
-            np.save("./pictures/test.frame." + str(i), observation["frame"].squeeze())
             if observation["done"].item():
                 returns.append(observation["episode_return"].item())
                 logging.info(

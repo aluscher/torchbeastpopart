@@ -1,3 +1,13 @@
+# Test
+```bash
+python -m torchbeast.polybeast --mode test --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
+python -m torchbeast.polybeast --mode test_render --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
+```
+
+# Saliency
+```bash
+python -m torchbeast.saliency --xpid MultiTask --env PongNoFrameskip-v4 --resolution=75 --num_frames 5 --savedir=./logs/torchbeast
+```
 
 # TorchBeast
 A PyTorch implementation of [IMPALA: Scalable Distributed
