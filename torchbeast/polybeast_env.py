@@ -71,12 +71,18 @@ if __name__ == "__main__":
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
     processes = []
-    for i in range(flags.num_servers):
-        p = mp.Process(
-            target=serve, args=(flags.env, f"{flags.pipes_basename}.{i}"), daemon=True
-        )
-        p.start()
-        processes.append(p)
+    envs = flags.env.split(",")
+    if len(envs) == 1 or flags.num_servers % len(envs) == 0:
+        for i in range(flags.num_servers):
+            p = mp.Process(
+                target=serve, args=(envs[i % len(envs)], f"{flags.pipes_basename}.{i}"), daemon=True
+            )
+            p.start()
+            processes.append(p)
+            print("Starting environment", i, "(", envs[i % len(envs)], ").")
+    else:
+        raise Exception("Wrong number of servers for environments.")
+
 
     try:
         # We are only here to listen to the interrupt.
