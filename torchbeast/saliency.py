@@ -24,7 +24,7 @@ import torchbeast.polybeast as tb
 
 parser = argparse.ArgumentParser(description="PyTorch Saliency for Scalable Agent")
 
-parser.add_argument("--savedir", default="~/logs/torchbeast",
+parser.add_argument("--savedir", default="./logs/torchbeast",
                     help="Root dir where experiment data will be saved.")
 parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
@@ -42,7 +42,7 @@ parser.add_argument("--density", default=2, type=int,
                     help=".")
 parser.add_argument("--radius", default=2, type=int,
                     help=".")
-parser.add_argument("--saliency_dir", default="/movies/",
+parser.add_argument("--saliencydir", default="./movies/",
                     help=".")
 
 logging.basicConfig(
@@ -178,7 +178,7 @@ def get_env_meta(env_name):
 
 
 def make_movie(model, env, flags):
-    movie_title = "{}-{}-{}.mp4".format("saliency", flags.num_frames, flags.env)
+    movie_title = "{}_{}_{}_{}_{}.mp4".format("saliency", flags.env, flags.xpid, flags.first_frame, flags.num_frames)
     max_ep_len = flags.first_frame + flags.num_frames + 1
     torch.manual_seed(0)
     history = rollout(model, env, max_ep_len=max_ep_len)
@@ -191,8 +191,13 @@ def make_movie(model, env, flags):
     prog = "";
     total_frames = len(history["observation"])
     f = plt.figure(figsize=[6, 6 * 1.3], dpi=flags.resolution)
-    #with writer.saving(f, flags.savedir + flags.saliency_dir + movie_title, flags.resolution):
-    with writer.saving(f, "./movie.mp4", flags.resolution):
+
+    moviepath = os.path.expandvars(
+        os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, flags.saliencydir))
+    )
+    if not os.path.exists(moviepath):
+        os.makedirs(moviepath)
+    with writer.saving(f, moviepath + "/" + movie_title, flags.resolution):
         for i in range(flags.num_frames):
             ix = flags.first_frame + i
             if ix < total_frames:  # prevent loop from trying to process a frame ix greater than rollout length
