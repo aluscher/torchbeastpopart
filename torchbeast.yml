@@ -1,0 +1,14 @@
+name: torchbeast
+dependencies:
+  - pytorch
+  - torchvision
+  - scikit-image
+  - flake8
+  - black
+  - pre-commit
+  - gitpython
+  - ffmpeg
+  - pip
+  - pip:
+    - gym[atari]
+    - opencv-python
