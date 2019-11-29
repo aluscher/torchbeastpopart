@@ -36,7 +36,7 @@ from torch.nn import functional as F
 from torchbeast.core import file_writer, environment
 from torchbeast.core import vtrace
 from torchbeast import atari_wrappers
-
+from torchbeast.polybeast_env import create_env
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
@@ -111,11 +111,75 @@ parser.add_argument("--write_profiler_trace", action="store_true",
                     help="Collect and write a profiler trace "
                     "for chrome://tracing/.")
 
+parser.add_argument("--save_model_every_nsteps", default=0, type=int,
+                    help="Save model every n steps")
+
 # Test settings.
 parser.add_argument("--num_episodes", default=100, type=int,
                     help="Number of episodes for Testing.")
 
 # yapf: enable
+
+
+atari_environments = np.array(["AirRaidNoFrameskip-v4"
+                                  , "AlienNoFrameskip-v4"
+                                  , "AmidarNoFrameskip-v4"
+                                  , "AssaultNoFrameskip-v4"
+                                  , "AsterixNoFrameskip-v4"
+                                  , "AsteroidsNoFrameskip-v4"
+                                  , "AtlantisNoFrameskip-v4"
+                                  , "BankHeistNoFrameskip-v4"
+                                  , "BattleZoneNoFrameskip-v4"
+                                  , "BeamRiderNoFrameskip-v4"
+                                  , "BerzerkNoFrameskip-v4"
+                                  , "BowlingNoFrameskip-v4"
+                                  , "BoxingNoFrameskip-v4"
+                                  , "BreakoutNoFrameskip-v4"
+                                  , "CarnivalNoFrameskip-v4"
+                                  , "CentipedeNoFrameskip-v4"
+                                  , "ChopperCommandNoFrameskip-v4"
+                                  , "CrazyClimberNoFrameskip-v4"
+                                  , "DemonAttackNoFrameskip-v4"
+                                  , "DoubleDunkNoFrameskip-v4"
+                                  , "ElevatorActionNoFrameskip-v4"
+                                  , "EnduroNoFrameskip-v4"
+                                  , "FishingDerbyNoFrameskip-v4"
+                                  , "FreewayNoFrameskip-v4"
+                                  , "FrostbiteNoFrameskip-v4"
+                                  , "GopherNoFrameskip-v4"
+                                  , "GravitarNoFrameskip-v4"
+                                  , "IceHockeyNoFrameskip-v4"
+                                  , "JamesbondNoFrameskip-v4"
+                                  , "JourneyEscapeNoFrameskip-v4"
+                                  , "KangarooNoFrameskip-v4"
+                                  , "KrullNoFrameskip-v4"
+                                  , "KungFuMasterNoFrameskip-v4"
+                                  , "MontezumaRevengeNoFrameskip-v4"
+                                  , "MsPacmanNoFrameskip-v4"
+                                  , "NameThisGameNoFrameskip-v4"
+                                  , "PhoenixNoFrameskip-v4"
+                                  , "PitfallNoFrameskip-v4"
+                                  , "PongNoFrameskip-v4"
+                                  , "PooyanNoFrameskip-v4"
+                                  , "PrivateEyeNoFrameskip-v4"
+                                  , "QbertNoFrameskip-v4"
+                                  , "RiverraidNoFrameskip-v4"
+                                  , "RoadRunnerNoFrameskip-v4"
+                                  , "RobotankNoFrameskip-v4"
+                                  , "SeaquestNoFrameskip-v4"
+                                  , "SkiingNoFrameskip-v4"
+                                  , "SolarisNoFrameskip-v4"
+                                  , "SpaceInvadersNoFrameskip-v4"
+                                  , "StarGunnerNoFrameskip-v4"
+                                  , "TennisNoFrameskip-v4"
+                                  , "TimePilotNoFrameskip-v4"
+                                  , "TutankhamNoFrameskip-v4"
+                                  , "UpNDownNoFrameskip-v4"
+                                  , "VentureNoFrameskip-v4"
+                                  , "VideoPinballNoFrameskip-v4"
+                                  , "WizardOfWorNoFrameskip-v4"
+                                  , "YarsRevengeNoFrameskip-v4"
+                                  , "ZaxxonNoFrameskip-v4"])
 
 
 logging.basicConfig(
@@ -146,16 +210,6 @@ def compute_policy_gradient_loss(logits, actions, advantages):
     cross_entropy = cross_entropy.view_as(advantages)
     return torch.sum(cross_entropy * advantages.detach())
 
-
-def create_env(flags):
-    return atari_wrappers.wrap_pytorch(
-        atari_wrappers.wrap_deepmind(
-            atari_wrappers.make_atari(flags.env),
-            clip_rewards=False,
-            frame_stack=True,
-            scale=False,
-        )
-    )
 
 class Net(nn.Module):
     def __init__(self, num_actions, use_lstm=False):
@@ -424,6 +478,8 @@ def train(flags):
     checkpointpath = os.path.expandvars(
         os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
     )
+    if flags.save_model_every_nsteps > 0:
+        os.makedirs(checkpointpath.replace("model.tar", "intermediate"), exist_ok=True)
 
     if not flags.disable_cuda and torch.cuda.is_available():
         logging.info("Using CUDA.")
@@ -573,11 +629,26 @@ def train(flags):
             checkpointpath,
         )
 
+    def savemodel():
+        savemodelpath = checkpointpath.replace("model.tar", "intermediate/model." + str(stats.get("step")).zfill(9) + ".tar")
+        logging.info("Saving model to %s", savemodelpath)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "stats": stats,
+                "flags": vars(flags),
+            },
+            savemodelpath,
+        )
+
     def format_value(x):
         return f"{x:1.5}" if isinstance(x, float) else str(x)
 
     try:
         last_checkpoint_time = timeit.default_timer()
+        last_savemodel_nsteps = 0
         while True:
             start_time = timeit.default_timer()
             start_step = stats.get("step", 0)
@@ -590,6 +661,11 @@ def train(flags):
                 # Save every 10 min.
                 checkpoint()
                 last_checkpoint_time = timeit.default_timer()
+
+            if flags.save_model_every_nsteps > 0 and end_step >=  last_savemodel_nsteps + flags.save_model_every_nsteps:
+                # save model every save_model_every_nsteps steps
+                savemodel()
+                last_savemodel_nsteps = end_step
 
             logging.info(
                 "Step %i @ %.1f SPS. Inference batcher size: %i."
@@ -628,12 +704,16 @@ def test(flags):
             os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
         )
 
-    gym_env = create_env(flags)
-    env = environment.Environment(gym_env)
-    model = Net(gym_env.action_space.n, flags.use_lstm)
+    model = Net(flags.num_actions, flags.use_lstm)
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
+
+    full_action_space = False
+    if flags.num_actions == 18:
+        full_action_space = True
+    gym_env = create_env(flags.env, full_action_space=full_action_space)
+    env = environment.Environment(gym_env)
 
     observation = env.initial()
     returns = []
@@ -664,32 +744,19 @@ def test(flags):
 
 
 def debug(flags):
-    envs = np.array(["AirRaidNoFrameskip-v4","AlienNoFrameskip-v4","AmidarNoFrameskip-v4","AssaultNoFrameskip-v4",
-                     "AsterixNoFrameskip-v4","AsteroidsNoFrameskip-v4","AtlantisNoFrameskip-v4",
-                     "BankHeistNoFrameskip-v4","BattleZoneNoFrameskip-v4","BeamRiderNoFrameskip-v4",
-                     "BerzerkNoFrameskip-v4","BowlingNoFrameskip-v4","BoxingNoFrameskip-v4","BreakoutNoFrameskip-v4",
-                     "CarnivalNoFrameskip-v4","CentipedeNoFrameskip-v4","ChopperCommandNoFrameskip-v4",
-                     "CrazyClimberNoFrameskip-v4","DemonAttackNoFrameskip-v4","DoubleDunkNoFrameskip-v4",
-                     "ElevatorActionNoFrameskip-v4","EnduroNoFrameskip-v4","FishingDerbyNoFrameskip-v4",
-                     "FreewayNoFrameskip-v4","FrostbiteNoFrameskip-v4","GopherNoFrameskip-v4","GravitarNoFrameskip-v4",
-                     "IceHockeyNoFrameskip-v4","JamesbondNoFrameskip-v4","JourneyEscapeNoFrameskip-v4",
-                     "KangarooNoFrameskip-v4","KrullNoFrameskip-v4","KungFuMasterNoFrameskip-v4",
-                     "MontezumaRevengeNoFrameskip-v4","MsPacmanNoFrameskip-v4","NameThisGameNoFrameskip-v4",
-                     "PhoenixNoFrameskip-v4","PitfallNoFrameskip-v4","PongNoFrameskip-v4","PooyanNoFrameskip-v4",
-                     "PrivateEyeNoFrameskip-v4","QbertNoFrameskip-v4","RiverraidNoFrameskip-v4",
-                     "RoadRunnerNoFrameskip-v4","RobotankNoFrameskip-v4","SeaquestNoFrameskip-v4",
-                     "SkiingNoFrameskip-v4","SolarisNoFrameskip-v4","SpaceInvadersNoFrameskip-v4",
-                     "StarGunnerNoFrameskip-v4","TennisNoFrameskip-v4","TimePilotNoFrameskip-v4",
-                     "TutankhamNoFrameskip-v4","UpNDownNoFrameskip-v4","VentureNoFrameskip-v4",
-                     "VideoPinballNoFrameskip-v4","WizardOfWorNoFrameskip-v4","YarsRevengeNoFrameskip-v4",
-                     "ZaxxonNoFrameskip-v4"])
+    envs = atari_environments
 
     l = envs.shape[0]
-    for i in range(envs.shape[0]):
+    print(l, "environments")
+    for i in range(l):
         env = create_env(envs[i])
         print(env)
         print(env.action_space)
         print(env.get_action_meanings())
+    env = create_env(envs[0], full_action_space=True)
+    print(env)
+    print(env.action_space)
+    print(env.get_action_meanings())
     env.close()
 
 
@@ -698,6 +765,11 @@ def main(flags):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
     if flags.start_servers and flags.mode == "train":
+        if flags.env == "all":
+            flags.env = ",".join(atari_environments)
+            if flags.num_actors != atari_environments.shape[0]:
+                flags.num_actors = atari_environments.shape[0]
+                logging.info("Changes number of environment servers to '%s'", atari_environments.shape[0])
         command = [
             "python",
             "-m",

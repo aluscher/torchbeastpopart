@@ -46,11 +46,11 @@ class Env:
         return frame, 0.0, False, {}  # First three mandatory.
 
 
-def create_env(env_name, lock=threading.Lock()):
+def create_env(env_name, full_action_space=False, lock=threading.Lock()):
     with lock:  # Atari isn't threadsafe at construction time.
         return atari_wrappers.wrap_pytorch(
             atari_wrappers.wrap_deepmind(
-                atari_wrappers.make_atari(env_name),
+                atari_wrappers.make_atari(env_name, full_action_space=full_action_space),
                 clip_rewards=False,
                 frame_stack=True,
                 scale=False,
@@ -58,8 +58,8 @@ def create_env(env_name, lock=threading.Lock()):
         )
 
 
-def serve(env_name, server_address):
-    init = Env if env_name == "Mock" else lambda: create_env(env_name)
+def serve(env_name, full_action_space, server_address):
+    init = Env if env_name == "Mock" else lambda: create_env(env_name, full_action_space=full_action_space)
     server = rpcenv.Server(init, server_address=server_address)
     server.run()
 
@@ -72,10 +72,21 @@ if __name__ == "__main__":
 
     processes = []
     envs = flags.env.split(",")
+
+    # determine if action spaces are compatible, otherwise use full action space
+    full_action_space = True
+    action_spaces = []
+    for i in range(len(envs)):
+        env = create_env(envs[i])
+        action_spaces.append(env.action_space)
+        env.close()
+    if all(x == action_spaces[0] for x in action_spaces):
+        full_action_space = False
+
     if len(envs) == 1 or flags.num_servers % len(envs) == 0:
         for i in range(flags.num_servers):
             p = mp.Process(
-                target=serve, args=(envs[i % len(envs)], f"{flags.pipes_basename}.{i}"), daemon=True
+                target=serve, args=(envs[i % len(envs)], full_action_space, f"{flags.pipes_basename}.{i}"), daemon=True
             )
             p.start()
             processes.append(p)
