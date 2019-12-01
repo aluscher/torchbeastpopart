@@ -121,7 +121,8 @@ parser.add_argument("--num_episodes", default=100, type=int,
 # yapf: enable
 
 
-atari_environments = np.array(["AirRaidNoFrameskip-v4"
+atari_environments = np.array(["AdventureNoFrameskip-v4"
+                                  , "AirRaidNoFrameskip-v4"
                                   , "AlienNoFrameskip-v4"
                                   , "AmidarNoFrameskip-v4"
                                   , "AssaultNoFrameskip-v4"
@@ -139,15 +140,17 @@ atari_environments = np.array(["AirRaidNoFrameskip-v4"
                                   , "CentipedeNoFrameskip-v4"
                                   , "ChopperCommandNoFrameskip-v4"
                                   , "CrazyClimberNoFrameskip-v4"
+                                  # , "DefenderNoFrameskip-v4"  # doesn't work
                                   , "DemonAttackNoFrameskip-v4"
                                   , "DoubleDunkNoFrameskip-v4"
                                   , "ElevatorActionNoFrameskip-v4"
-                                  , "EnduroNoFrameskip-v4"
+                                  , "EnduroNoFrameskip-v4" # not in torchbeast paper
                                   , "FishingDerbyNoFrameskip-v4"
-                                  , "FreewayNoFrameskip-v4"
+                                  , "FreewayNoFrameskip-v4" # not in torchbeast paper
                                   , "FrostbiteNoFrameskip-v4"
                                   , "GopherNoFrameskip-v4"
                                   , "GravitarNoFrameskip-v4"
+                                  , "HeroNoFrameskip-v4"
                                   , "IceHockeyNoFrameskip-v4"
                                   , "JamesbondNoFrameskip-v4"
                                   , "JourneyEscapeNoFrameskip-v4"
@@ -167,15 +170,16 @@ atari_environments = np.array(["AirRaidNoFrameskip-v4"
                                   , "RoadRunnerNoFrameskip-v4"
                                   , "RobotankNoFrameskip-v4"
                                   , "SeaquestNoFrameskip-v4"
-                                  , "SkiingNoFrameskip-v4"
-                                  , "SolarisNoFrameskip-v4"
+                                  , "SkiingNoFrameskip-v4"  # not in torchbeast paper
+                                  , "SolarisNoFrameskip-v4"  # not in torchbeast paper
                                   , "SpaceInvadersNoFrameskip-v4"
                                   , "StarGunnerNoFrameskip-v4"
+                                  #, "SurroundNoFrameskip-v4"  # doesn't work
                                   , "TennisNoFrameskip-v4"
                                   , "TimePilotNoFrameskip-v4"
                                   , "TutankhamNoFrameskip-v4"
                                   , "UpNDownNoFrameskip-v4"
-                                  , "VentureNoFrameskip-v4"
+                                  , "VentureNoFrameskip-v4"  # not in torchbeast paper
                                   , "VideoPinballNoFrameskip-v4"
                                   , "WizardOfWorNoFrameskip-v4"
                                   , "YarsRevengeNoFrameskip-v4"
@@ -769,7 +773,9 @@ def main(flags):
             flags.env = ",".join(atari_environments)
             if flags.num_actors != atari_environments.shape[0]:
                 flags.num_actors = atari_environments.shape[0]
-                logging.info("Changes number of environment servers to '%s'", atari_environments.shape[0])
+                logging.info("Changed number of environment servers to '%s'", str(atari_environments.shape[0]))
+        if flags.env == "six":
+            flags.env = "AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4"
         command = [
             "python",
             "-m",
