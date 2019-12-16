@@ -1,3 +1,20 @@
+# Models
+
+logs/torchbeast/...
+
+AirRaid (50 million steps, models saved every 1 million steps)
+AirRaid200 (200 million steps, without intermediate models)
+Carnival (50 million steps, models saved every 1 million steps)
+Carnival200 
+DemonAttack (50 million steps, models saved every 1 million steps)
+NameThisGame (50 million steps, models saved every 1 million steps)
+Pong (50 million steps, models saved every 1 million steps)
+SpaceInvaders (50 million steps, models saved every 1 million steps)
+
+MultiTask (AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders, 200 million steps, odels saved every 1 million steps)
+MultiTask3Games (Carnival,DemonAttack,AirRaid, 100 million steps, odels saved every 1 million steps)
+
+
 # Experiments
 
 ## Architectural Choices
