@@ -24,6 +24,7 @@ import typing
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
+import numpy as np
 import torch
 from torch import multiprocessing as mp
 from torch import nn
@@ -34,6 +35,8 @@ from torchbeast.core import environment
 from torchbeast.core import file_writer
 from torchbeast.core import prof
 from torchbeast.core import vtrace
+
+from torchbeast.attention_augmented_agent import AttentionAugmentedAgent
 
 
 # yapf: disable
@@ -138,45 +141,74 @@ def act(
         logging.info("Actor %i started.", actor_index)
         timings = prof.Timings()  # Keep track of how fast things are.
 
+        # create the environment from command line parameters
+        # => could also create a special one which operates on a list of games (which we need)
         gym_env = create_env(flags)
+        # NOTE: this part of the act() function is only called once when the actor thread/process
+        # is started, so it would probably not be a good idea to just distribute the different
+        # games over different environments, but that each environment contains all games
+
+        # generate a seed for the environment (NO HUMAN STARTS HERE!), could just
+        # use this for all games wrapped by the environment for our application
         seed = actor_index ^ int.from_bytes(os.urandom(4), byteorder="little")
         gym_env.seed(seed)
+
+        # wrap the environment, this is actually probably the point where we could
+        # use multiple games, because the other environment is still one from Gym
         env = environment.Environment(gym_env)
+
+        # get the initial frame, reward, done, return, step, last_action
         env_output = env.initial()
+
+        # perform the first step
         agent_state = model.initial_state(batch_size=1)
         agent_output, unused_state = model(env_output, agent_state)
         while True:
+            # get a buffer index from the queue for free buffers (?)
             index = free_queue.get()
+            # termination signal (?) for breaking out of this loop
             if index is None:
                 break
 
             # Write old rollout end.
+            # the keys here are (frame, reward, done, episode_return, episode_step, last_action)
             for key in env_output:
                 buffers[key][index][0, ...] = env_output[key]
+            # here the keys are (policy_logits, baseline, action)
             for key in agent_output:
                 buffers[key][index][0, ...] = agent_output[key]
+            # I think the agent_state is just the RNN/LSTM state (which will be the "initial" state for the next step)
+            # not sure why it's needed though because it really just seems to be the initial state before starting to
+            # act; however, it might be randomly initialised, which is why we might want it...
             for i, tensor in enumerate(agent_state):
                 initial_agent_state_buffers[index][i][...] = tensor
 
-            # Do new rollout.
+            # Do new rollout (ONLY UP TO A FIXED LENGTH, IS THIS WHAT WE WANT?)
             for t in range(flags.unroll_length):
                 timings.reset()
 
+                # forward pass without keeping track of gradients to get the agent action
                 with torch.no_grad():
                     agent_output, agent_state = model(env_output, agent_state)
 
                 timings.time("model")
 
+                # agent acting in the environment
+                # TODO: does that mean the same action isn't executed for 4 time steps?
                 env_output = env.step(agent_output["action"])
 
                 timings.time("step")
 
+                # writing the respective outputs of the current step (see above for the list of keys)
                 for key in env_output:
                     buffers[key][index][t + 1, ...] = env_output[key]
                 for key in agent_output:
                     buffers[key][index][t + 1, ...] = agent_output[key]
 
                 timings.time("write")
+
+            # after finishing a trajectory put the index in the "full queue",
+            # presumably so that the data can be processed/sent to the learner
             full_queue.put(index)
 
         if actor_index == 0:
@@ -200,26 +232,33 @@ def get_batch(
     timings,
     lock=threading.Lock(),
 ):
+    # need to make sure that we wait until batch_size trajectories/rollouts have been put into the queue
     with lock:
         timings.time("lock")
+        # get the indices of actors "offering" trajectories/rollouts to be processed by the learner
         indices = [full_queue.get() for _ in range(flags.batch_size)]
         timings.time("dequeue")
-    batch = {
-        key: torch.stack([buffers[key][m] for m in indices], dim=1) for key in buffers
-    }
-    initial_agent_state = (
-        torch.cat(ts, dim=1)
-        for ts in zip(*[initial_agent_state_buffers[m] for m in indices])
-    )
+
+    # create the batch as a dictionary for all the data in the buffers (see act() function for list of
+    # keys), where each entry is a tensor of these values stacked across actors along the first dimension,
+    # which I believe should be the "batch dimension" (see _format_frame())
+    batch = {key: torch.stack([buffers[key][m] for m in indices], dim=1) for key in buffers}
+
+    # similar thing for the initial agent states, where I think the tuples are concatenated to become torch tensors
+    initial_agent_state = (torch.cat(ts, dim=1) for ts in zip(*[initial_agent_state_buffers[m] for m in indices]))
     timings.time("batch")
+
+    # once the data has been "transferred" into batch and initial_agent_state,
+    # signal that the data has been processed to the actors
     for m in indices:
         free_queue.put(m)
     timings.time("enqueue")
+
+    # move the data to the right device (e.g. GPU)
     batch = {k: t.to(device=flags.device, non_blocking=True) for k, t in batch.items()}
-    initial_agent_state = tuple(
-        t.to(device=flags.device, non_blocking=True) for t in initial_agent_state
-    )
+    initial_agent_state = tuple(t.to(device=flags.device, non_blocking=True) for t in initial_agent_state)
     timings.time("device")
+
     return batch, initial_agent_state
 
 
@@ -231,11 +270,12 @@ def learn(
     initial_agent_state,
     optimizer,
     scheduler,
-    lock=threading.Lock(),  # noqa: B008
+    lock=threading.Lock(),
 ):
     """Performs a learning (optimization) step."""
     with lock:
-        learner_outputs, unused_state = model(batch, initial_agent_state)
+        # forward pass with gradients
+        learner_outputs, unused_state = model(batch, initial_agent_state, test=True)
 
         # Take final value function slice for bootstrapping.
         bootstrap_value = learner_outputs["baseline"][-1]
@@ -244,14 +284,21 @@ def learn(
         batch = {key: tensor[1:] for key, tensor in batch.items()}
         learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
 
+        # if specified, clip rewards between -1 and 1
         rewards = batch["reward"]
         if flags.reward_clipping == "abs_one":
             clipped_rewards = torch.clamp(rewards, -1, 1)
         elif flags.reward_clipping == "none":
             clipped_rewards = rewards
 
+        # the "~"/tilde operator is apparently kind of a complement or # inverse, so maybe this just reverses
+        # the "done" tensor? in that case would discounting only be applied when the game was NOT done?
+        # TODO: print this out to see what it actually does
         discounts = (~batch["done"]).float() * flags.discounting
 
+        # get the V-trace returns; I hope nothing needs to be changed about this, but I think
+        # once one has the V-trace returns it can just be plugged into the PopArt equations
+        # TODO: would still be good to properly understand what is happening inside this method
         vtrace_returns = vtrace.from_logits(
             behavior_policy_logits=batch["policy_logits"],
             target_policy_logits=learner_outputs["policy_logits"],
@@ -262,20 +309,26 @@ def learn(
             bootstrap_value=bootstrap_value,
         )
 
+        # policy gradient loss
         pg_loss = compute_policy_gradient_loss(
             learner_outputs["policy_logits"],
             batch["action"],
             vtrace_returns.pg_advantages,
         )
+
+        # value function/baseline loss (1/2 * squared difference between V-trace and value function)
         baseline_loss = flags.baseline_cost * compute_baseline_loss(
             vtrace_returns.vs - learner_outputs["baseline"]
         )
+
+        # entropy loss for getting a "diverse" action distribution (?), "normal entropy" over action distribution
         entropy_loss = flags.entropy_cost * compute_entropy_loss(
             learner_outputs["policy_logits"]
         )
 
         total_loss = pg_loss + baseline_loss + entropy_loss
 
+        # get the returns only for finished episodes (where the game was played to completion)
         episode_returns = batch["episode_return"][batch["done"]]
         stats = {
             "episode_returns": tuple(episode_returns.cpu().numpy()),
@@ -286,19 +339,25 @@ def learn(
             "entropy_loss": entropy_loss.item(),
         }
 
+        # do the backward pass (WITH GRADIENT NORM CLIPPING) and adjust hyperparameters (scheduler, ?)
         optimizer.zero_grad()
         total_loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
         scheduler.step()
 
+        # update the actor model with the new parameters
         actor_model.load_state_dict(model.state_dict())
+
         return stats
 
 
 def create_buffers(flags, obs_shape, num_actions) -> Buffers:
+    # TODO: should probably print this out to get what exactly is happening here; in particular I don't really
+    #  understand if the specs dictionary is even really used for anything else but to create the buffers;
+    #  I'm also not sure what exactly the number of buffers influences here, so should figure that out
     T = flags.unroll_length
-    specs = dict(
+    specs = dict(  # seems like these "inner" dicts could also be something else...
         frame=dict(size=(T + 1, *obs_shape), dtype=torch.uint8),
         reward=dict(size=(T + 1,), dtype=torch.float32),
         done=dict(size=(T + 1,), dtype=torch.bool),
@@ -310,6 +369,10 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
         action=dict(size=(T + 1,), dtype=torch.int64),
     )
     buffers: Buffers = {key: [] for key in specs}
+
+    # basically create a bunch of empty torch tensors according to the sizes in the specs dicts above
+    # and do this for the specified number of buffers, so that there will be a list of length flags.num_buffers
+    # for each key
     for _ in range(flags.num_buffers):
         for key in buffers:
             buffers[key].append(torch.empty(**specs[key]).share_memory_())
@@ -344,11 +407,15 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         logging.info("Not using CUDA.")
         flags.device = torch.device("cpu")
 
+    # create a dummy environment, mostly to get the observation and action spaces from
     env = create_env(flags)
 
+    # create the model and the buffers to pass around data between actors and learner
     model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm)
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
+    # I'm guessing that this is required (similarly to the buffers) so that the
+    # different threads/processes can all have access to the parameters etc. (?)
     model.share_memory()
 
     # Add initial RNN state.
@@ -359,6 +426,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             t.share_memory_()
         initial_agent_state_buffers.append(state)
 
+    # create stuff to keep track of the actor processes
     actor_processes = []
     ctx = mp.get_context("fork")
     free_queue = ctx.SimpleQueue()
@@ -380,10 +448,11 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         actor.start()
         actor_processes.append(actor)
 
-    learner_model = Net(
-        env.observation_space.shape, env.action_space.n, flags.use_lstm
-    ).to(device=flags.device)
+    learner_model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm).to(device=flags.device)
 
+    # the hyperparameters in the paper are found/adjusted using population-based training,
+    # which might be a bit too difficult for us to do; while the IMPALA paper also does
+    # some experiments with this, it doesn't seem to be implemented here
     optimizer = torch.optim.RMSprop(
         learner_model.parameters(),
         lr=flags.learning_rate,
@@ -411,6 +480,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
+        # step in particular needs to be from the outside scope, since all learner threads can update
+        # it and all learners should stop once the total number of steps/frames has been processed
         nonlocal step, stats
         timings = prof.Timings()
         while step < flags.total_steps:
@@ -423,27 +494,25 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 initial_agent_state_buffers,
                 timings,
             )
-            stats = learn(
-                flags, model, learner_model, batch, agent_state, optimizer, scheduler
-            )
+            stats = learn(flags, model, learner_model, batch, agent_state, optimizer, scheduler)
             timings.time("learn")
             with lock:
                 to_log = dict(step=step)
                 to_log.update({k: stats[k] for k in stat_keys})
                 plogger.log(to_log)
-                step += T * B
+                step += T * B  # so this counts the number of frames, not e.g. trajectories/rollouts
 
         if i == 0:
             logging.info("Batch and learn: %s", timings.summary())
 
+    # populate the free queue with the indices of all the buffers at the start
     for m in range(flags.num_buffers):
         free_queue.put(m)
 
+    # start as many learner threads as specified => could in principle do PBT (somehow?)
     threads = []
     for i in range(flags.num_learner_threads):
-        thread = threading.Thread(
-            target=batch_and_learn, name="batch-and-learn-%d" % i, args=(i,)
-        )
+        thread = threading.Thread(target=batch_and_learn, name="batch-and-learn-%d" % i, args=(i,))
         thread.start()
         threads.append(thread)
 
@@ -469,15 +538,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             start_time = timer()
             time.sleep(5)
 
-            if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min.
+            if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min. TODO: probably change this to count steps
                 checkpoint()
                 last_checkpoint_time = timer()
 
             sps = (step - start_step) / (timer() - start_time)
             if stats.get("episode_returns", None):
-                mean_return = (
-                    "Return per episode: %.1f. " % stats["mean_episode_return"]
-                )
+                mean_return = ("Return per episode: %.1f. " % stats["mean_episode_return"])
             else:
                 mean_return = ""
             total_loss = stats.get("total_loss", float("inf"))
@@ -497,7 +564,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         logging.info("Learning finished after %d steps.", step)
     finally:
         for _ in range(flags.num_actors):
-            free_queue.put(None)
+            free_queue.put(None)  # send quit signal to actors
         for actor in actor_processes:
             actor.join(timeout=1)
 
@@ -509,9 +576,7 @@ def test(flags, num_episodes: int = 10):
     if flags.xpid is None:
         checkpointpath = "./latest/model.tar"
     else:
-        checkpointpath = os.path.expandvars(
-            os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
-        )
+        checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar")))
 
     gym_env = create_env(flags)
     env = environment.Environment(gym_env)
@@ -537,9 +602,7 @@ def test(flags, num_episodes: int = 10):
                 observation["episode_return"].item(),
             )
     env.close()
-    logging.info(
-        "Average returns over %i steps: %.1f", num_episodes, sum(returns) / len(returns)
-    )
+    logging.info("Average returns over %i steps: %.1f", num_episodes, sum(returns) / len(returns))
 
 
 class AtariNet(nn.Module):
@@ -579,8 +642,14 @@ class AtariNet(nn.Module):
             for _ in range(2)
         )
 
-    def forward(self, inputs, core_state=()):
+    def forward(self, inputs, core_state=(), test=False):
         x = inputs["frame"]  # [T, B, C, H, W].
+        if test:
+            print("\nframe shape: {}\n".format(x.shape))
+            t = x.cpu().numpy()[0, 0, ...]
+            print("t shape: {}".format(t.shape))
+            # np.save("test_frame", t)
+            pass
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
@@ -596,25 +665,47 @@ class AtariNet(nn.Module):
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
 
+        if test:
+            print("one_hot_last_action shape: {}".format(one_hot_last_action.shape))
+            print("clipped_reward shape: {}".format(clipped_reward.shape))
+            print("core_input shape: {}".format(core_input.shape))
+            notdone = (~inputs["done"]).float()
+            print("notdone shape: {}\n".format(notdone.shape))
+
         if self.use_lstm:
             core_input = core_input.view(T, B, -1)
             core_output_list = []
+            # notdone has shape (time_steps, batch_size)
             notdone = (~inputs["done"]).float()
             for input, nd in zip(core_input.unbind(), notdone.unbind()):
                 # Reset core state to zero whenever an episode ended.
                 # Make `done` broadcastable with (num_layers, B, hidden_size)
                 # states:
                 nd = nd.view(1, -1, 1)
+                if test:
+                    print("NOTDONE SHAPE:", notdone.shape)
+                    print("ND SHAPE:", nd.shape)
+                    print("CORE_STATE SHAPES:", core_state[0].shape, core_state[1].shape)
                 core_state = tuple(nd * s for s in core_state)
                 output, core_state = self.core(input.unsqueeze(0), core_state)
+                if test:
+                    print("OUTPUT SHAPE:", output.shape)
                 core_output_list.append(output)
             core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
+            # pretty sure flatten() is just used to merge time and batch again
         else:
             core_output = core_input
             core_state = tuple()
 
+        # core_output should have shape (T * B, hidden_size) now?
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
+
+        if test:
+            print("\ncore_output shape: {}".format(core_output.shape))
+            print("policy_logits shape: {}".format(policy_logits.shape))
+            print("baseline shape: {}".format(baseline.shape))
+            pass
 
         if self.training:
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
@@ -622,9 +713,19 @@ class AtariNet(nn.Module):
             # Don't sample when testing.
             action = torch.argmax(policy_logits, dim=1)
 
+        if test:
+            print("action shape: {}".format(action.shape))
+            pass
+
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
         action = action.view(T, B)
+
+        if test:
+            print("policy_logits shape: {}".format(policy_logits.shape))
+            print("baseline shape: {}".format(baseline.shape))
+            print("action shape: {}\n".format(action.shape))
+            pass
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
@@ -632,7 +733,8 @@ class AtariNet(nn.Module):
         )
 
 
-Net = AtariNet
+# Net = AtariNet
+Net = AttentionAugmentedAgent
 
 
 def create_env(flags):
