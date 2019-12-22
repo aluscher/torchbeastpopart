@@ -721,10 +721,10 @@ class AtariNet(nn.Module):
 Net = AttentionAugmentedAgent
 
 
-def create_env(flags):
+def create_env(flags, full_action_space=False):
     return atari_wrappers.wrap_pytorch(
         atari_wrappers.wrap_deepmind(
-            atari_wrappers.make_atari(flags.env),
+            atari_wrappers.make_atari(flags.env, full_action_space=full_action_space),
             clip_rewards=False,
             frame_stack=True,
             scale=False,
