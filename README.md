@@ -1,3 +1,41 @@
+# Experiments
+
+## Trained models
+
+https://drive.google.com/file/d/1yJpZFGPL-ero2fJUBNYS6pLDS5tatb7h/view?usp=sharing
+
+| Name | Environments | Steps (millions) | Intermediate models |
+| ---- |------------- | ---------------- | ------------------- |
+| AirRaid | AirRaidNoFrameskip-v4 | 50 | yes |
+| AirRaid200 | AirRaidNoFrameskip-v4 | 200 | no |
+| Carnival | CarnivalNoFrameskip-v4  | 50 | yes |
+| Carnival200 | CarnivalNoFrameskip-v4  | 200 | no |
+| DemonAttack | DemonAttackNoFrameskip-v4 | 50 | yes |
+| NameThisGame| ameThisGameNoFrameskip-v4 | 50 | yes |
+| Pong| PongNoFrameskip-v4 | 50 | yes |
+| SpaceInvaders | SpaceInvadersNoFrameskip-v4 | 50 | yes |
+| MultiTask | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 200 | yes |
+| MultiTask3Games | Carnival,DemonAttack,AirRaid NoFrameskip-v4 | 100 | yes |
+
+## Architectural Choices
+
+| \# | Name | Pretrained Network | Games | Reward Clipping | Command |
+| --- | --- | ---------- | ----- | --------------- | --------- |
+| 1 | Single Agent | - | one for each? | no | |
+| 2 | Multi Agent w/o Reward Clipping | - | <ul><li>Air Raid</li><li>Carnival</li><li>Demon Attack</li><li>Space Invaders</li></ul> | no | |
+| 3 | Multi Agent w/ Reward Clipping | - | <ul><li>Air Raid</li><li>Carnival</li><li>Demon Attack</li><li>Space Invaders</li></ul> | yes | |
+
+## Transfer Learning
+
+| \# | Name | Pretrained Network | Games | Reward Clipping | Command |
+| --- | --- | ---------- | ----- | --------------- | --------- |
+| 4 | Transfer Learning Baseline | - | <ul><li>Name This Game</li></ul> | no | |
+| 5 | Transfer Learning Baseline | - | <ul><li>Pong</li></ul> | no | |
+| 6 | Transfer Learning Single Agent | 1 | <ul><li>Name This Game</li></ul> | no | |
+| 7 | Transfer Learning Single Agent | 1 | <ul><li>Pong</li></ul> | no | |
+| 8 | Transfer Learning Multi Agent | 3 | <ul><li>Name This Game</li></ul> | yes | |
+| 9 | Transfer Learning Multi Agent | 3 | <ul><li>Pong</li></ul> | yes | |
+
 # Test
 ```bash
 python -m torchbeast.polybeast --mode test --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast

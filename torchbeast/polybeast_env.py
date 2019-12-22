@@ -80,7 +80,7 @@ if __name__ == "__main__":
         env = create_env(envs[i])
         action_spaces.append(env.action_space)
         env.close()
-    if all(x == action_spaces[0] for x in action_spaces):
+    if flags.env != "all" and all(x == action_spaces[0] for x in action_spaces):
         full_action_space = False
 
     if len(envs) == 1 or flags.num_servers % len(envs) == 0:
