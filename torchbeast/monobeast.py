@@ -132,6 +132,7 @@ def compute_policy_gradient_loss(logits, actions, advantages):
 
 def act(
     flags,
+    env,
     actor_index: int,
     free_queue: mp.SimpleQueue,
     full_queue: mp.SimpleQueue,
@@ -145,7 +146,7 @@ def act(
 
         # create the environment from command line parameters
         # => could also create a special one which operates on a list of games (which we need)
-        gym_env = create_env(flags)
+        gym_env = create_env(env)
         # NOTE: this part of the act() function is only called once when the actor thread/process
         # is started, so it would probably not be a good idea to just distribute the different
         # games over different environments, but that each environment contains all games
@@ -417,8 +418,10 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         Net = AtariNet
         logging.warning("No valid agent type specified. Using the default agent.")
 
+    environments = flags.env.split(",")
+
     # create a dummy environment, mostly to get the observation and action spaces from
-    env = create_env(flags)
+    env = create_env(environments[0])
 
     # create the model and the buffers to pass around data between actors and learner
     model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm)
@@ -442,21 +445,25 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
-    for i in range(flags.num_actors):
-        actor = ctx.Process(
-            target=act,
-            args=(
-                flags,
-                i,
-                free_queue,
-                full_queue,
-                model,
-                buffers,
-                initial_agent_state_buffers,
-            ),
-        )
-        actor.start()
-        actor_processes.append(actor)
+    if len(environments) == 1 or flags.num_actors % len(environments) == 0:
+        for i in range(flags.num_actors):
+            actor = ctx.Process(
+                target=act,
+                args=(
+                    flags,
+                    environments[i % len(environments)],
+                    i,
+                    free_queue,
+                    full_queue,
+                    model,
+                    buffers,
+                    initial_agent_state_buffers,
+                ),
+            )
+            actor.start()
+            actor_processes.append(actor)
+    else:
+        raise Exception("Wrong number of actors for environments.")
 
     learner_model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm).to(device=flags.device)
 
@@ -596,7 +603,10 @@ def test(flags, num_episodes: int = 10):
         Net = AtariNet
         logging.warning("No valid agent type specified. Using the default agent.")
 
-    gym_env = create_env(flags)
+    if len(flags.env.split(",")) != 1:
+        raise Exception("Only one environment allowed for testing")
+
+    gym_env = create_env(flags.env)
     env = environment.Environment(gym_env)
     model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm)
     model.eval()
@@ -721,10 +731,10 @@ class AtariNet(nn.Module):
 Net = AttentionAugmentedAgent
 
 
-def create_env(flags, full_action_space=False):
+def create_env(env, full_action_space=False):
     return atari_wrappers.wrap_pytorch(
         atari_wrappers.wrap_deepmind(
-            atari_wrappers.make_atari(flags.env, full_action_space=full_action_space),
+            atari_wrappers.make_atari(env, full_action_space=full_action_space),
             clip_rewards=False,
             frame_stack=True,
             scale=False,
