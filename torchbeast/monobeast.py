@@ -71,6 +71,8 @@ parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
 parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
+parser.add_argument("--agent_type", type=str, default="aaa",
+                    help="The type of network to use for the agent.")
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.0006,
@@ -275,7 +277,7 @@ def learn(
     """Performs a learning (optimization) step."""
     with lock:
         # forward pass with gradients
-        learner_outputs, unused_state = model(batch, initial_agent_state, test=True)
+        learner_outputs, unused_state = model(batch, initial_agent_state)
 
         # Take final value function slice for bootstrapping.
         bootstrap_value = learner_outputs["baseline"][-1]
@@ -407,11 +409,19 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         logging.info("Not using CUDA.")
         flags.device = torch.device("cpu")
 
+    # set the right agent class
+    if flags.agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
+        Net = AttentionAugmentedAgent
+        logging.info("Using the Attention-Augmented Agent architecture.")
+    else:
+        Net = AtariNet
+        logging.warning("No valid agent type specified. Using the default agent.")
+
     # create a dummy environment, mostly to get the observation and action spaces from
     env = create_env(flags)
 
     # create the model and the buffers to pass around data between actors and learner
-    model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm)
+    model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm)
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
     # I'm guessing that this is required (similarly to the buffers) so that the
@@ -448,7 +458,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         actor.start()
         actor_processes.append(actor)
 
-    learner_model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm).to(device=flags.device)
+    learner_model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm).to(device=flags.device)
 
     # the hyperparameters in the paper are found/adjusted using population-based training,
     # which might be a bit too difficult for us to do; while the IMPALA paper also does
@@ -578,9 +588,17 @@ def test(flags, num_episodes: int = 10):
     else:
         checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar")))
 
+    # set the right agent class
+    if flags.agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
+        Net = AttentionAugmentedAgent
+        logging.info("Using the Attention-Augmented Agent architecture.")
+    else:
+        Net = AtariNet
+        logging.warning("No valid agent type specified. Using the default agent.")
+
     gym_env = create_env(flags)
     env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, flags.use_lstm)
+    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm)
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -606,7 +624,8 @@ def test(flags, num_episodes: int = 10):
 
 
 class AtariNet(nn.Module):
-    def __init__(self, observation_shape, num_actions, use_lstm=False):
+
+    def __init__(self, observation_shape, num_actions, use_lstm=False, **kwargs):
         super(AtariNet, self).__init__()
         self.observation_shape = observation_shape
         self.num_actions = num_actions
@@ -642,14 +661,8 @@ class AtariNet(nn.Module):
             for _ in range(2)
         )
 
-    def forward(self, inputs, core_state=(), test=False):
+    def forward(self, inputs, core_state=()):
         x = inputs["frame"]  # [T, B, C, H, W].
-        if test:
-            print("\nframe shape: {}\n".format(x.shape))
-            t = x.cpu().numpy()[0, 0, ...]
-            print("t shape: {}".format(t.shape))
-            # np.save("test_frame", t)
-            pass
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
@@ -665,13 +678,6 @@ class AtariNet(nn.Module):
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
 
-        if test:
-            print("one_hot_last_action shape: {}".format(one_hot_last_action.shape))
-            print("clipped_reward shape: {}".format(clipped_reward.shape))
-            print("core_input shape: {}".format(core_input.shape))
-            notdone = (~inputs["done"]).float()
-            print("notdone shape: {}\n".format(notdone.shape))
-
         if self.use_lstm:
             core_input = core_input.view(T, B, -1)
             core_output_list = []
@@ -682,14 +688,8 @@ class AtariNet(nn.Module):
                 # Make `done` broadcastable with (num_layers, B, hidden_size)
                 # states:
                 nd = nd.view(1, -1, 1)
-                if test:
-                    print("NOTDONE SHAPE:", notdone.shape)
-                    print("ND SHAPE:", nd.shape)
-                    print("CORE_STATE SHAPES:", core_state[0].shape, core_state[1].shape)
                 core_state = tuple(nd * s for s in core_state)
                 output, core_state = self.core(input.unsqueeze(0), core_state)
-                if test:
-                    print("OUTPUT SHAPE:", output.shape)
                 core_output_list.append(output)
             core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
             # pretty sure flatten() is just used to merge time and batch again
@@ -701,31 +701,15 @@ class AtariNet(nn.Module):
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
 
-        if test:
-            print("\ncore_output shape: {}".format(core_output.shape))
-            print("policy_logits shape: {}".format(policy_logits.shape))
-            print("baseline shape: {}".format(baseline.shape))
-            pass
-
         if self.training:
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.
             action = torch.argmax(policy_logits, dim=1)
 
-        if test:
-            print("action shape: {}".format(action.shape))
-            pass
-
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
         action = action.view(T, B)
-
-        if test:
-            print("policy_logits shape: {}".format(policy_logits.shape))
-            print("baseline shape: {}".format(baseline.shape))
-            print("action shape: {}\n".format(action.shape))
-            pass
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
