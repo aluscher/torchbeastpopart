@@ -445,7 +445,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
-    for i, env in environments:
+    for i, env in enumerate(environments):
         for j in range(flags.num_actors):
             actor = ctx.Process(
                 target=act,
