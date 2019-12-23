@@ -56,7 +56,7 @@ parser.add_argument("--disable_checkpoint", action="store_true",
 parser.add_argument("--savedir", default="~/logs/torchbeast",
                     help="Root dir where experiment data will be saved.")
 parser.add_argument("--num_actors", default=4, type=int, metavar="N",
-                    help="Number of actors (default: 4).")
+                    help="Number of actors per environment (default: 4).")
 parser.add_argument("--total_steps", default=100000, type=int, metavar="T",
                     help="Total environment steps to train for.")
 parser.add_argument("--batch_size", default=8, type=int, metavar="B",
@@ -445,14 +445,14 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
-    if len(environments) == 1 or flags.num_actors % len(environments) == 0:
-        for i in range(flags.num_actors):
+    for i, env in environments:
+        for j in range(flags.num_actors):
             actor = ctx.Process(
                 target=act,
                 args=(
                     flags,
-                    environments[i % len(environments)],
-                    i,
+                    env,
+                    i*flags.num_actors + j,
                     free_queue,
                     full_queue,
                     model,
@@ -462,8 +462,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             )
             actor.start()
             actor_processes.append(actor)
-    else:
-        raise Exception("Wrong number of actors for environments.")
 
     learner_model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm).to(device=flags.device)
 
