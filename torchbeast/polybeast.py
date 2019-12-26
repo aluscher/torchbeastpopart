@@ -456,8 +456,8 @@ def learn(
             discounts=discounts,
             rewards=clipped_rewards,
             values=learner_outputs.baseline,
-            normalized_values=learner_outputs.normalized_baseline,
             bootstrap_value=bootstrap_value,
+            normalized_values=learner_outputs.normalized_baseline,
             mu=mu,
             sigma=sigma
         )
