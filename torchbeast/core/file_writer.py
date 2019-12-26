@@ -213,3 +213,10 @@ class FileWriter:
     def _save_metadata(self) -> None:
         with open(self.paths["meta"], "w") as jsonfile:
             json.dump(self.metadata, jsonfile, indent=4, sort_keys=True)
+
+
+def read_metadata(filename):
+    with open(filename) as json_file:
+        data = json.load(json_file)
+
+    return data

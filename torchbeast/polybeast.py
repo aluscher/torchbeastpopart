@@ -23,6 +23,9 @@ import time
 import timeit
 import traceback
 
+import re
+
+
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
 import nest
@@ -33,10 +36,13 @@ from libtorchbeast import actorpool
 from torch import nn
 from torch.nn import functional as F
 
-from torchbeast.core import file_writer, environment
+from torchbeast.core import file_writer
 from torchbeast.core import vtrace
+from torchbeast.core.environment import Environment
+from torchbeast.core.file_writer import read_metadata
+from torchbeast.core.popart import PopArtLayer
+
 from torchbeast import atari_wrappers
-from torchbeast.polybeast_env import create_env
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
@@ -45,7 +51,7 @@ parser.add_argument("--pipes_basename", default="unix:/tmp/polybeast",
                     help="Basename for the pipes for inter-process communication. "
                     "Has to be of the type unix:/some/path.")
 parser.add_argument("--mode", default="train",
-                    choices=["train", "test", "test_render", "debug"],
+                    choices=["train", "test", "test_render", "env_info"],
                     help="Training or test mode.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
@@ -60,19 +66,19 @@ parser.add_argument("--env", type=str, default="PongNoFrameskip-v4",
 # Training settings.
 parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
-parser.add_argument("--savedir", default="~/logs/torchbeast",
+parser.add_argument("--savedir", default="./logs/torchbeast-local",
                     help="Root dir where experiment data will be saved.")
-parser.add_argument("--num_actors", default=4, type=int, metavar="N",
+parser.add_argument("--num_actors", default=8, type=int, metavar="N",
                     help="Number of actors.")
-parser.add_argument("--total_steps", default=100000, type=int, metavar="T",
+parser.add_argument("--total_steps", default=1000000, type=int, metavar="T",
                     help="Total environment steps to train for.")
 parser.add_argument("--batch_size", default=8, type=int, metavar="B",
                     help="Learner batch size.")
 parser.add_argument("--unroll_length", default=80, type=int, metavar="T",
                     help="The unroll length (time dimension).")
-parser.add_argument("--num_learner_threads", default=2, type=int,
+parser.add_argument("--num_learner_threads", default=1, type=int,
                     metavar="N", help="Number learner threads.")
-parser.add_argument("--num_inference_threads", default=2, type=int,
+parser.add_argument("--num_inference_threads", default=1, type=int,
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
@@ -82,6 +88,8 @@ parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
 parser.add_argument("--max_learner_queue_size", default=None, type=int, metavar="N",
                     help="Optional maximum learner queue size. Defaults to batch_size.")
+parser.add_argument("--use_popart", action="store_true",
+                    help="Use PopArt Layer.")
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.0006, type=float,
@@ -105,18 +113,21 @@ parser.add_argument("--epsilon", default=0.01, type=float,
                     help="RMSProp epsilon.")
 parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
+parser.add_argument("--beta", default=0.0001, type=float,
+                    help="PopArt parameter")
 
 # Misc settings.
 parser.add_argument("--write_profiler_trace", action="store_true",
                     help="Collect and write a profiler trace "
                     "for chrome://tracing/.")
-
 parser.add_argument("--save_model_every_nsteps", default=0, type=int,
                     help="Save model every n steps")
 
 # Test settings.
 parser.add_argument("--num_episodes", default=100, type=int,
                     help="Number of episodes for Testing.")
+parser.add_argument("--intermediate_model_id", default=None,
+                    help="id for intermediate model: model.id.tar")
 
 # yapf: enable
 
@@ -208,18 +219,21 @@ def compute_entropy_loss(logits):
 def compute_policy_gradient_loss(logits, actions, advantages):
     cross_entropy = F.nll_loss(
         F.log_softmax(torch.flatten(logits, 0, 1), dim=-1),
-        target=torch.flatten(actions, 0, 1),
+        target=torch.flatten(actions, 0, 2),
         reduction="none",
     )
-    cross_entropy = cross_entropy.view_as(advantages)
+    cross_entropy = cross_entropy.view_as(actions)
     return torch.sum(cross_entropy * advantages.detach())
 
 
 class Net(nn.Module):
-    def __init__(self, num_actions, use_lstm=False):
+    def __init__(self, num_actions, num_tasks=1, use_lstm=False, use_popart=False, reward_clipping="abs_one"):
         super(Net, self).__init__()
         self.num_actions = num_actions
+        self.num_tasks = num_tasks
         self.use_lstm = use_lstm
+        self.use_popart = use_popart
+        self.reward_clipping = reward_clipping
 
         self.feat_convs = []
         self.resnet1 = []
@@ -285,7 +299,7 @@ class Net(nn.Module):
             core_output_size = 256
 
         self.policy = nn.Linear(core_output_size, self.num_actions)
-        self.baseline = nn.Linear(core_output_size, 1)
+        self.baseline = PopArtLayer(core_output_size, num_tasks if self.use_popart else 1)
 
     def initial_state(self, batch_size=1):
         if not self.use_lstm:
@@ -297,6 +311,7 @@ class Net(nn.Module):
 
     def forward(self, inputs, core_state):
         x = inputs["frame"]
+
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
@@ -315,7 +330,11 @@ class Net(nn.Module):
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
-        clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
+        if self.reward_clipping == "abs_one":
+            clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
+        elif self.reward_clipping == "none":
+            clipped_reward = inputs["reward"].view(T * B, 1)
+
         core_input = torch.cat([x, clipped_reward], dim=-1)
 
         if self.use_lstm:
@@ -335,7 +354,7 @@ class Net(nn.Module):
             core_output = core_input
 
         policy_logits = self.policy(core_output)
-        baseline = self.baseline(core_output)
+        baseline, normalized_baseline = self.baseline(core_output)
 
         if self.training:
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
@@ -344,35 +363,38 @@ class Net(nn.Module):
             action = torch.argmax(policy_logits, dim=1)
 
         policy_logits = policy_logits.view(T, B, self.num_actions)
-        baseline = baseline.view(T, B)
-        action = action.view(T, B)
 
-        return (action, policy_logits, baseline), core_state
+        baseline = baseline.view(T, B, self.num_tasks)
+        normalized_baseline = normalized_baseline.view(T, B, self.num_tasks)
+        action = action.view(T, B, 1)
+
+        return (action, policy_logits, baseline, normalized_baseline), core_state
 
 
 def inference(flags, inference_batcher, model, lock=threading.Lock()):  # noqa: B008
     with torch.no_grad():
         for batch in inference_batcher:
             batched_env_outputs, agent_state = batch.get_inputs()
-            frame, reward, done, *_ = batched_env_outputs
+            frame, reward, done, task, *_ = batched_env_outputs
             frame = frame.to(flags.actor_device, non_blocking=True)
             reward = reward.to(flags.actor_device, non_blocking=True)
             done = done.to(flags.actor_device, non_blocking=True)
+            task = task.to(flags.actor_device, non_blocking=True)
             agent_state = nest.map(
                 lambda t: t.to(flags.actor_device, non_blocking=True), agent_state
             )
             with lock:
                 outputs = model(
-                    dict(frame=frame, reward=reward, done=done), agent_state
+                    dict(frame=frame, reward=reward, done=done, task=task), agent_state
                 )
             outputs = nest.map(lambda t: t.cpu(), outputs)
             batch.set_outputs(outputs)
 
 
 EnvOutput = collections.namedtuple(
-    "EnvOutput", "frame rewards done episode_step episode_return"
+    "EnvOutput", "frame rewards done task episode_step episode_return"
 )
-AgentOutput = collections.namedtuple("AgentOutput", "action policy_logits baseline")
+AgentOutput = collections.namedtuple("AgentOutput", "action policy_logits baseline normalized_baseline")
 Batch = collections.namedtuple("Batch", "env agent")
 
 
@@ -392,11 +414,11 @@ def learn(
 
         batch, initial_agent_state = tensors
         env_outputs, actor_outputs = batch
-        frame, reward, done, *_ = env_outputs
+        frame, reward, done, task, *_ = env_outputs
 
         lock.acquire()  # Only one thread learning at a time.
         learner_outputs, unused_state = model(
-            dict(frame=frame, reward=reward, done=done), initial_agent_state
+            dict(frame=frame, reward=reward, done=done, task=task), initial_agent_state
         )
 
         # Take final value function slice for bootstrapping.
@@ -420,6 +442,13 @@ def learn(
 
         discounts = (~env_outputs.done).float() * flags.discounting
 
+        task = torch.nn.functional.one_hot(env_outputs.task.long(), flags.num_tasks)
+        clipped_rewards = clipped_rewards[:, :, None]
+        discounts = discounts[:, :, None]
+
+        mu = model.baseline.mu[None, None, :]
+        sigma = model.baseline.sigma[None, None, :]
+
         vtrace_returns = vtrace.from_logits(
             behavior_policy_logits=actor_outputs.policy_logits,
             target_policy_logits=learner_outputs.policy_logits,
@@ -427,16 +456,22 @@ def learn(
             discounts=discounts,
             rewards=clipped_rewards,
             values=learner_outputs.baseline,
+            normalized_values=learner_outputs.normalized_baseline,
             bootstrap_value=bootstrap_value,
+            mu=mu,
+            sigma=sigma
         )
+
+        with torch.no_grad():
+            normalized_vs = (vtrace_returns.vs - mu) / sigma
 
         pg_loss = compute_policy_gradient_loss(
             learner_outputs.policy_logits,
             actor_outputs.action,
-            vtrace_returns.pg_advantages,
+            vtrace_returns.pg_advantages * task,
         )
         baseline_loss = flags.baseline_cost * compute_baseline_loss(
-            vtrace_returns.vs - learner_outputs.baseline
+            (normalized_vs - learner_outputs.normalized_baseline) * task
         )
         entropy_loss = flags.entropy_cost * compute_entropy_loss(
             learner_outputs.policy_logits
@@ -450,6 +485,9 @@ def learn(
         optimizer.step()
         scheduler.step()
 
+        if flags.use_popart:
+            model.baseline.update_parameters(vtrace_returns.vs, task)
+
         actor_model.load_state_dict(model.state_dict())
 
         episode_returns = env_outputs.episode_return[env_outputs.done]
@@ -461,6 +499,8 @@ def learn(
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
         stats["entropy_loss"] = entropy_loss.item()
+        stats["mu"] = mu[0, 0, :].numpy()
+        stats["sigma"] = sigma[0, 0, :].numpy()
 
         stats["learner_queue_size"] = learner_queue.size()
 
@@ -479,6 +519,7 @@ def train(flags):
     plogger = file_writer.FileWriter(
         xpid=flags.xpid, xp_args=flags.__dict__, rootdir=flags.savedir
     )
+
     checkpointpath = os.path.expandvars(
         os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
     )
@@ -488,7 +529,7 @@ def train(flags):
     if not flags.disable_cuda and torch.cuda.is_available():
         logging.info("Using CUDA.")
         flags.learner_device = torch.device("cuda:0")
-        flags.actor_device = torch.device("cuda:0")
+        flags.actor_device = torch.device("cuda:1")
     else:
         logging.info("Not using CUDA.")
         flags.learner_device = torch.device("cpu")
@@ -529,10 +570,10 @@ def train(flags):
                 break
         pipe_id += 1
 
-    model = Net(num_actions=flags.num_actions, use_lstm=flags.use_lstm)
+    model = Net(num_actions=flags.num_actions, num_tasks=flags.num_tasks, use_lstm=flags.use_lstm, use_popart=flags.use_popart, reward_clipping=flags.reward_clipping)
     model = model.to(device=flags.learner_device)
 
-    actor_model = Net(num_actions=flags.num_actions, use_lstm=flags.use_lstm)
+    actor_model = Net(num_actions=flags.num_actions, num_tasks=flags.num_tasks, use_lstm=flags.use_lstm, use_popart=flags.use_popart, reward_clipping=flags.reward_clipping)
     actor_model.to(device=flags.actor_device)
 
     # The ActorPool that will run `flags.num_actors` many loops.
@@ -702,13 +743,27 @@ def train(flags):
 def test(flags):
 
     if flags.xpid is None:
-        checkpointpath = "./latest/model.tar"
-    else:
         checkpointpath = os.path.expandvars(
-            os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
+            os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar"))
         )
+    else:
+        if flags.intermediate_model_id is None:
+            checkpointpath = os.path.expandvars(
+                os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
+            )
+        else:
+            checkpointpath = os.path.expandvars(
+                os.path.expanduser("%s/%s/%s/%s" % (flags.savedir, flags.xpid, "intermediate", "model." + flags.intermediate_model_id + ".tar"))
+            )
+    flags_orig = read_metadata(re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+    args_orig = flags_orig["args"]
+    num_actions = args_orig.get("num_actions")
+    num_tasks = args_orig.get("num_tasks", 1)
+    use_lstm = args_orig.get("use_lstm", False)
+    use_popart = args_orig.get("use_popart", False)
+    reward_clipping = args_orig.get("reward_clipping", "abs_one")
 
-    model = Net(flags.num_actions, flags.use_lstm)
+    model = Net(num_actions=num_actions, num_tasks=num_tasks, use_lstm=use_lstm, use_popart=use_popart, reward_clipping=reward_clipping)
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -716,14 +771,13 @@ def test(flags):
     full_action_space = False
     if flags.num_actions == 18:
         full_action_space = True
-    gym_env = create_env(flags.env, full_action_space=full_action_space)
-    env = environment.Environment(gym_env)
+    gym_env = create_env(flags.env, full_action_space)
+    env = Environment(gym_env)
 
     observation = env.initial()
     returns = []
 
     with torch.no_grad():
-
         i = 0
         while len(returns) < flags.num_episodes:
             if flags.mode == "test_render":
@@ -739,6 +793,7 @@ def test(flags):
                     observation["episode_step"].item(),
                     observation["episode_return"].item(),
                 )
+                print("Episode ended after", observation["episode_step"].item(), "steps. Return:", observation["episode_return"].item(), flush=True)
             i = i + 1
 
     env.close()
@@ -747,7 +802,7 @@ def test(flags):
     )
 
 
-def debug(flags):
+def env_info(flags):
     envs = atari_environments
 
     l = envs.shape[0]
@@ -768,14 +823,18 @@ def main(flags):
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
+    if flags.env == "six":
+        flags.env = "AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4"
+    elif flags.env == "three":
+        flags.env = "AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4"
+    flags.num_tasks = len(flags.env.split(",")) if flags.use_popart else 1
+
     if flags.start_servers and flags.mode == "train":
         if flags.env == "all":
             flags.env = ",".join(atari_environments)
             if flags.num_actors != atari_environments.shape[0]:
                 flags.num_actors = atari_environments.shape[0]
                 logging.info("Changed number of environment servers to '%s'", str(atari_environments.shape[0]))
-        if flags.env == "six":
-            flags.env = "AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4"
         command = [
             "python",
             "-m",
@@ -784,6 +843,8 @@ def main(flags):
             f"--pipes_basename={flags.pipes_basename}",
             f"--env={flags.env}",
         ]
+        if flags.use_popart:
+            command.append("--multitask")
         logging.info("Starting servers with command: " + " ".join(command))
         server_proc = subprocess.Popen(command)
 
@@ -802,12 +863,23 @@ def main(flags):
     if flags.mode == "test" or flags.mode == "test_render":
         test(flags)
 
-    if flags.mode == "debug":
-        debug(flags)
+    if flags.mode == "env_info":
+        env_info(flags)
 
     if flags.start_servers and flags.mode == "train":
         # Send Ctrl-c to servers.
         server_proc.send_signal(signal.SIGINT)
+
+
+def create_env(env_name, full_action_space=False):
+    return atari_wrappers.wrap_pytorch(
+        atari_wrappers.wrap_deepmind(
+            atari_wrappers.make_atari(env_name, full_action_space=full_action_space),
+            clip_rewards=False,
+            frame_stack=True,
+            scale=False,
+        )
+    )
 
 
 if __name__ == "__main__":
