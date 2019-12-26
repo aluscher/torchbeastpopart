@@ -85,15 +85,14 @@ if __name__ == "__main__":
             env = create_env(envs[i])
             action_spaces.append(env.action_space)
             env.close()
-        if flags.env != "all" and all(x == action_spaces[0] for x in action_spaces):
+        if all(x == action_spaces[0] for x in action_spaces):
             full_action_space = False
 
     if len(envs) <= flags.num_servers:
         for i in range(flags.num_servers):
-
             task = i % len(envs) if flags.multitask else 0
             p = mp.Process(
-                target=serve, args=(envs[task], task, full_action_space, f"{flags.pipes_basename}.{i}"), daemon=True
+                target=serve, args=(envs[i % len(envs)], task, full_action_space, f"{flags.pipes_basename}.{i}"), daemon=True
             )
             p.start()
             processes.append(p)
