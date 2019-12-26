@@ -55,6 +55,9 @@ class PopArtLayer(torch.nn.Module):
         sigma = torch.sqrt(nu - mu**2)
         sigma = torch.clamp(sigma, min=1e-4, max=1e+6)
 
+        mu[torch.isnan(mu)] = self.mu[torch.isnan(mu)]
+        sigma[torch.isnan(sigma)] = self.sigma[torch.isnan(sigma)]
+
         self.mu = (1 - self.beta) * self.mu + self.beta * mu
         self.sigma = (1 - self.beta) * self.sigma + self.beta * sigma
 

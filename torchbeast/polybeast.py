@@ -492,6 +492,7 @@ def learn(
 
         episode_returns = env_outputs.episode_return[env_outputs.done]
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
+        stats["step_env"] = stats.get("step_env", 0) + task.sum((0, 1))
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
         stats["mean_episode_return"] = torch.mean(episode_returns).item()
         stats["mean_episode_step"] = torch.mean(env_outputs.episode_step.float()).item()
@@ -499,8 +500,8 @@ def learn(
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
         stats["entropy_loss"] = entropy_loss.item()
-        stats["mu"] = mu[0, 0, :].numpy()
-        stats["sigma"] = sigma[0, 0, :].numpy()
+        stats["mu"] = mu[0, 0, :]
+        stats["sigma"] = sigma[0, 0, :]
 
         stats["learner_queue_size"] = learner_queue.size()
 
