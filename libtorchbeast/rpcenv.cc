@@ -52,6 +52,7 @@ class EnvServer {
       PyArrayNest observation;
       float reward = 0.0;
       bool done = true;
+      int task = 0;
       int episode_step = 0;
       float episode_return = 0.0;
 
@@ -59,14 +60,15 @@ class EnvServer {
           [&observation](PyArrayNest o) { observation = std::move(o); },
           py::arg("observation"));
 
-      auto set_observation_reward_done = py::cpp_function(
-          [&observation, &reward, &done](PyArrayNest o, float r, bool d,
+      auto set_observation_reward_done_task = py::cpp_function(
+          [&observation, &reward, &done, &task](PyArrayNest o, float r, bool d, int t,
                                          py::args) {
             observation = std::move(o);
             reward = r;
             done = d;
+            task = t;
           },
-          py::arg("observation"), py::arg("reward"), py::arg("done"));
+          py::arg("observation"), py::arg("reward"), py::arg("done"), py::arg("task"));
 
       try {
         pyenv = env_init_();
@@ -86,6 +88,7 @@ class EnvServer {
 
       step_pb.set_reward(reward);
       step_pb.set_done(done);
+      step_pb.set_task(task);
       step_pb.set_episode_step(episode_step);
       step_pb.set_episode_return(episode_return);
 
@@ -100,7 +103,7 @@ class EnvServer {
         }
         try {
           // I'm not sure if this is fast, but it's convienient.
-          set_observation_reward_done(*stepfunc(nest_pb_to_nest(
+          set_observation_reward_done_task(*stepfunc(nest_pb_to_nest(
               action_pb.mutable_nest_action(), array_pb_to_nest)));
 
           episode_step += 1;
@@ -109,6 +112,7 @@ class EnvServer {
           step_pb.Clear();
           step_pb.set_reward(reward);
           step_pb.set_done(done);
+          step_pb.set_task(task);
           step_pb.set_episode_step(episode_step);
           step_pb.set_episode_return(episode_return);
           if (done) {

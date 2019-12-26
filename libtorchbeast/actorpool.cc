@@ -434,6 +434,7 @@ class ActorPool {
           if (!stream->Read(&step_pb)) {
             throw py::connection_error("Read failed.");
           }
+
           env_outputs = ActorPool::step_pb_to_nest(&step_pb);
           compute_inputs = TensorNest(std::vector({env_outputs, agent_state}));
 
@@ -493,6 +494,8 @@ class ActorPool {
   static TensorNest step_pb_to_nest(rpcenv::Step* step_pb) {
     TensorNest done = TensorNest(
         torch::full({1, 1}, step_pb->done(), torch::dtype(torch::kBool)));
+    TensorNest task = TensorNest(
+        torch::full({1, 1}, step_pb->task(), torch::dtype(torch::kInt32)));
     TensorNest reward = TensorNest(torch::full({1, 1}, step_pb->reward()));
     TensorNest episode_step = TensorNest(torch::full(
         {1, 1}, step_pb->episode_step(), torch::dtype(torch::kInt32)));
@@ -501,7 +504,7 @@ class ActorPool {
 
     return TensorNest(std::vector(
         {nest_pb_to_nest(step_pb->mutable_observation(), array_pb_to_nest),
-         std::move(reward), std::move(done), std::move(episode_step),
+         std::move(reward), std::move(done), std::move(task), std::move(episode_step),
          std::move(episode_return)}));
   }
 
