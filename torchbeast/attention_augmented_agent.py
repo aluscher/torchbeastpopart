@@ -223,7 +223,7 @@ class AttentionAugmentedAgent(nn.Module):
         self.policy_core = nn.LSTM(hidden_size, hidden_size)
 
         self.policy_head = nn.Sequential(nn.Linear(hidden_size, num_actions))
-        self.values_head = nn.Sequential(nn.Linear(hidden_size, 1))
+        self.baseline_head = nn.Sequential(nn.Linear(hidden_size, 1))
 
     def initial_state(self, batch_size):
         dummy_frame = torch.zeros(1, *self.observation_shape)
@@ -237,7 +237,7 @@ class AttentionAugmentedAgent(nn.Module):
         )
         return vision_core_initial_state + policy_core_initial_state
 
-    def forward(self, inputs, state=()):
+    def forward(self, inputs, state=(), return_activations=None):
         # input frames are formatted: (time_steps, batch_size, frame_stack, height, width)
         # the original network is designed for (batch_size, height, width, num_channels)
         # there are a couple options to solve this:
@@ -248,6 +248,12 @@ class AttentionAugmentedAgent(nn.Module):
         # so the following might be a better option (as far as implementation goes)
         # - use full colour, stack frames, use only the last one
         # => for now, I'm just going to use the first method
+
+        activations = {}
+        if return_activations:
+            if type(return_activations) is str:
+                return_activations = [return_activations]
+            return_activations = [ra for ra in return_activations if ra in [n for n, p in self.named_parameters()]]
 
         # (time_steps, batch_size, frame_stack, height, width)
         x: torch.Tensor = inputs["frame"]
@@ -351,7 +357,7 @@ class AttentionAugmentedAgent(nn.Module):
         # (time_steps * batch_size, num_actions)
         policy_logits = self.policy_head(output)
         # (time_steps * batch_size, 1)
-        baseline = self.values_head(output)
+        baseline = self.baseline_head(output)
 
         # (time_steps * batch_size, 1)
         if self.training:
