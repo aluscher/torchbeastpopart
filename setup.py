@@ -53,12 +53,13 @@ include_dirs = cpp_extension.include_paths() + [np.get_include(), f"{PREFIX}/inc
 libraries = []
 
 if sys.platform == "darwin":
-    extra_compile_args += ["-stdlib=libc++", "-mmacosx-version-min=10.14"]
-    extra_link_args += ["-stdlib=libc++", "-mmacosx-version-min=10.14"]
+    extra_compile_args += ["-stdlib=libc++", "-mmacosx-version-min=10.14", "-I/usr/local/opt/openssl@1.1/include"]
+    extra_link_args += ["-stdlib=libc++", "-mmacosx-version-min=10.14", "-L/usr/local/opt/openssl@1.1/lib"]
 
     # Relevant only when c-cares is not embedded in grpc, e.g. when
     # installing grpc via homebrew.
     libraries.append("cares")
+    libraries.append("ssl")
 elif sys.platform == "linux":
     libraries.append("z")
 

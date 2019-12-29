@@ -33,6 +33,9 @@ parser.add_argument('--num_servers', default=4, type=int, metavar='N',
                     help='Number of environment servers.')
 parser.add_argument('--env', type=str, default='PongNoFrameskip-v4',
                     help='Gym environment.')
+parser.add_argument("--multitask", action="store_true",
+                    help="Broadcast task id")
+
 # yapf: enable
 
 
@@ -43,23 +46,24 @@ class Env:
 
     def step(self, action):
         frame = np.zeros((4, 84, 84), dtype=np.uint8)
-        return frame, 0.0, False, {}  # First three mandatory.
+        return frame, 0.0, False, 0, {}  # First four mandatory.
 
 
-def create_env(env_name, full_action_space=False, lock=threading.Lock()):
+def create_env(env_name, task=0, full_action_space=False, lock=threading.Lock()):
     with lock:  # Atari isn't threadsafe at construction time.
-        return atari_wrappers.wrap_pytorch(
+        return atari_wrappers.wrap_pytorch_task(
             atari_wrappers.wrap_deepmind(
                 atari_wrappers.make_atari(env_name, full_action_space=full_action_space),
                 clip_rewards=False,
                 frame_stack=True,
                 scale=False,
-            )
+            ),
+            task=task
         )
 
 
-def serve(env_name, full_action_space, server_address):
-    init = Env if env_name == "Mock" else lambda: create_env(env_name, full_action_space=full_action_space)
+def serve(env_name, task, full_action_space, server_address):
+    init = Env if env_name == "Mock" else lambda: create_env(env_name, task=task, full_action_space=full_action_space)
     server = rpcenv.Server(init, server_address=server_address)
     server.run()
 
@@ -75,22 +79,24 @@ if __name__ == "__main__":
 
     # determine if action spaces are compatible, otherwise use full action space
     full_action_space = True
-    action_spaces = []
-    for i in range(len(envs)):
-        env = create_env(envs[i])
-        action_spaces.append(env.action_space)
-        env.close()
-    if flags.env != "all" and all(x == action_spaces[0] for x in action_spaces):
-        full_action_space = False
+    if flags.env != "Mock":
+        action_spaces = []
+        for i in range(len(envs)):
+            env = create_env(envs[i])
+            action_spaces.append(env.action_space)
+            env.close()
+        if all(x == action_spaces[0] for x in action_spaces):
+            full_action_space = False
 
-    if len(envs) == 1 or flags.num_servers % len(envs) == 0:
+    if len(envs) <= flags.num_servers:
         for i in range(flags.num_servers):
+            task = i % len(envs) if flags.multitask else 0
             p = mp.Process(
-                target=serve, args=(envs[i % len(envs)], full_action_space, f"{flags.pipes_basename}.{i}"), daemon=True
+                target=serve, args=(envs[i % len(envs)], task, full_action_space, f"{flags.pipes_basename}.{i}"), daemon=True
             )
             p.start()
             processes.append(p)
-            print("Starting environment", i, "(", envs[i % len(envs)], ").")
+            print("Starting environment", i, "(", task, ", ", envs[task], ").")
     else:
         raise Exception("Wrong number of servers for environments.")
 

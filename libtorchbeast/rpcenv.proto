@@ -39,8 +39,9 @@ message Step {
   optional ArrayNest observation = 1;
   optional float reward = 2;
   optional bool done = 3;
-  optional int32 episode_step = 4;
-  optional float episode_return = 5;
+  optional int32 task = 4;
+  optional int32 episode_step = 5;
+  optional float episode_return = 6;
 }
 
 service RPCEnvServer {

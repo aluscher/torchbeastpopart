@@ -342,3 +342,21 @@ class ImageToPyTorch(gym.ObservationWrapper):
 
 def wrap_pytorch(env):
     return ImageToPyTorch(env)
+
+
+class ImageToPyTorchTask(ImageToPyTorch):
+    """
+    Add task id to output
+    """
+
+    def __init__(self, env, task=0):
+        super(ImageToPyTorchTask, self).__init__(env)
+        self.task = task
+
+    def step(self, action):
+        ob, reward, done, info = super().step(action)
+        return ob, reward, done, self.task, info
+
+
+def wrap_pytorch_task(env, task=0):
+    return ImageToPyTorchTask(env, task=task)
