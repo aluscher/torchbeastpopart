@@ -1,5 +1,29 @@
 # Experiments
 
+## Movies
+
+Single-task:  
+![AirRaid (Single-task)](movies/AirRaid_050009600_AirRaidNoFrameskip-v4.gif)
+![Carnival (Single-task)](movies/Carnival_050002560_CarnivalNoFrameskip-v4.gif)
+![DemonAttack (Single-task)](movies/DemonAttack_050001280_DemonAttackNoFrameskip-v4.gif)
+![Pong (Single-task)](movies/Pong_050013440_PongNoFrameskip-v4.gif)
+![SpaceInvaders (Single-task)](movies/SpaceInvaders_050001280_SpaceInvadersNoFrameskip-v4.gif)
+  
+Multi-task:  
+![AirRaid (Multi-task)](movies/MultiTask_300014720_AirRaidNoFrameskip-v4.gif)
+![Carnival (Multi-task)](movies/MultiTask_300014720_CarnivalNoFrameskip-v4.gif)
+![DemonAttack (Multi-task)](movies/MultiTask_300014720_DemonAttackNoFrameskip-v4.gif)
+![Pong (Multi-task)](movies/MultiTask_300014720_PongNoFrameskip-v4.gif)
+![SpaceInvaders (Multi-task)](movies/MultiTask_300014720_SpaceInvadersNoFrameskip-v4.gif)
+  
+Popart:  
+![AirRaid (Popart)](movies/MultiTaskPopart_300010240_AirRaidNoFrameskip-v4.gif)
+![Carnival (Popart)](movies/MultiTaskPopart_300010240_CarnivalNoFrameskip-v4.gif)
+![DemonAttack (Popart)](movies/MultiTaskPopart_300010240_DemonAttackNoFrameskip-v4.gif)
+![Pong (Popart)](movies/MultiTaskPopart_300010240_PongNoFrameskip-v4.gif)
+![SpaceInvaders (Popart)](movies/MultiTaskPopart_300010240_SpaceInvadersNoFrameskip-v4.gif)
+
+
 ## Trained models
 
 https://drive.google.com/file/d/1yJpZFGPL-ero2fJUBNYS6pLDS5tatb7h/view?usp=sharing
