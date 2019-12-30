@@ -70,13 +70,13 @@ def from_logits(
     clip_pg_rho_threshold=1.0,
 ):
     """V-trace for softmax policies."""
-
+    device = target_policy_logits.device
     target_action_log_probs = action_log_probs(target_policy_logits, actions)
     behavior_action_log_probs = action_log_probs(behavior_policy_logits, actions)
     log_rhos = target_action_log_probs - behavior_action_log_probs
     if mu is None:
-        mu = torch.zeros(1)
-        sigma = torch.ones(1)
+        mu = torch.zeros(1).to(device)
+        sigma = torch.ones(1).to(device)
         normalized_values = values
     vtrace_returns = from_importance_weights(
         log_rhos=log_rhos,
