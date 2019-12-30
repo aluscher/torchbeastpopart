@@ -199,14 +199,29 @@ class AttentionAugmentedAgent(nn.Module):
             c_k: int = 8,
             c_s: int = 64,
             num_queries: int = 4,
+            rgb_last: bool = False,
             **kwargs
     ):
-        """Agent implementing the attention agent."""
         super(AttentionAugmentedAgent, self).__init__()
         self.hidden_size = hidden_size
         self.observation_shape = observation_shape
         self.num_actions = num_actions
+        self.rgb_last = rgb_last
         self.c_v, self.c_k, self.c_s, self.num_queries = c_v, c_k, c_s, num_queries
+        if self.rgb_last:
+            self.observation_shape = (3,) + tuple(self.observation_shape[1:])
+
+        self.config = {
+            "observation_shape": observation_shape,
+            "num_actions": num_actions,
+            "hidden_size": hidden_size,
+            "c_v": c_v,
+            "c_k": c_k,
+            "c_s": c_s,
+            "num_queries": num_queries,
+            "rgb_last": rgb_last
+        }
+        self.config.update(kwargs)
 
         self.vision = VisionNetwork(self.observation_shape[1], self.observation_shape[2],
                                     in_channels=self.observation_shape[0])
@@ -256,6 +271,9 @@ class AttentionAugmentedAgent(nn.Module):
         x = x.float() / 255.0
         # (time_steps, batch_size, height, width, frame_stack) to match the design of the network
         x = x.permute(0, 1, 3, 4, 2)
+        # frames are RGB and only the first should be used
+        if self.rgb_last:
+            x = x[:, :, :, :, -3:]
 
         # (time_steps, batch_size, 1)
         prev_reward = inputs["reward"].view(time_steps, batch_size, 1)

@@ -73,6 +73,12 @@ parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
 parser.add_argument("--agent_type", type=str, default="aaa",
                     help="The type of network to use for the agent.")
+parser.add_argument("--frame_height", type=int, default=84,
+                    help="Height to which frames are rescaled.")
+parser.add_argument("--frame_width", type=int, default=84,
+                    help="Width to which frames are rescaled.")
+parser.add_argument("--aaa_input_format", type=str, default="gray_stack", choices=["gray_stack", "rgb_last", "rgb_stack"],
+                    help="Color format of the frames as input for the AAA.")
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.0006,
@@ -154,7 +160,8 @@ def act(
 
         # create the environment from command line parameters
         # => could also create a special one which operates on a list of games (which we need)
-        gym_env = create_env(env)
+        gym_env = create_env(env, frame_height=flags.frame_height, frame_width=flags.frame_width,
+                             gray_scale=(flags.aaa_input_format == "gray_stack"))
         # NOTE: this part of the act() function is only called once when the actor thread/process
         # is started, so it would probably not be a good idea to just distribute the different
         # games over different environments, but that each environment contains all games
@@ -431,10 +438,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     environments = flags.env.split(",")
 
     # create a dummy environment, mostly to get the observation and action spaces from
-    env = create_env(environments[0])
+    env = create_env(environments[0], frame_height=flags.frame_height, frame_width=flags.frame_width,
+                     gray_scale=(flags.aaa_input_format == "gray_stack"))
 
     # create the model and the buffers to pass around data between actors and learner
-    model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm)
+    model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm,
+                rgb_last=(flags.aaa_input_format == "rgb_last"))
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
     # I'm guessing that this is required (similarly to the buffers) so that the
@@ -473,7 +482,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             actor.start()
             actor_processes.append(actor)
 
-    learner_model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm).to(device=flags.device)
+    learner_model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm,
+                        rgb_last=(flags.aaa_input_format == "rgb_last")).to(device=flags.device)
 
     # the hyperparameters in the paper are found/adjusted using population-based training,
     # which might be a bit too difficult for us to do; while the IMPALA paper also does
@@ -636,9 +646,11 @@ def test(flags, num_episodes: int = 10):
     if len(flags.env.split(",")) != 1:
         raise Exception("Only one environment allowed for testing")
 
-    gym_env = create_env(flags.env)
+    gym_env = create_env(flags.env, frame_height=flags.frame_height, frame_width=flags.frame_width,
+                         gray_scale=(flags.aaa_input_format == "gray_stack"))
     env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm)
+    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm,
+                rgb_last=(flags.aaa_input_format == "rgb_last"))
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -761,12 +773,15 @@ class AtariNet(nn.Module):
 Net = AttentionAugmentedAgent
 
 
-def create_env(env, full_action_space=False):
+def create_env(env, frame_height=84, frame_width=84, gray_scale=True, full_action_space=False):
     return atari_wrappers.wrap_pytorch(
         atari_wrappers.wrap_deepmind(
             atari_wrappers.make_atari(env, full_action_space=full_action_space),
             clip_rewards=False,
             frame_stack=True,
+            frame_height=frame_height,
+            frame_width=frame_width,
+            gray_scale=gray_scale,
             scale=False,
         )
     )

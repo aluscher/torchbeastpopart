@@ -22,6 +22,7 @@ def _format_frame(frame):
 
 
 class Environment:
+
     def __init__(self, gym_env):
         self.gym_env = gym_env
         self.episode_return = None
