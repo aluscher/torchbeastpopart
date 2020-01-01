@@ -132,7 +132,8 @@ def compute_policy_gradient_loss(logits, actions, advantages):
 
 def act(
     flags,
-    env,
+    env: str,
+    full_action_space: bool,
     actor_index: int,
     free_queue: mp.SimpleQueue,
     full_queue: mp.SimpleQueue,
@@ -146,7 +147,7 @@ def act(
 
         # create the environment from command line parameters
         # => could also create a special one which operates on a list of games (which we need)
-        gym_env = create_env(env)
+        gym_env = create_env(env, full_action_space)
         # NOTE: this part of the act() function is only called once when the actor thread/process
         # is started, so it would probably not be a good idea to just distribute the different
         # games over different environments, but that each environment contains all games
@@ -421,11 +422,21 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     environments = flags.env.split(",")
 
     # create a dummy environment, mostly to get the observation and action spaces from
-    env = create_env(environments[0])
+    gym_env = create_env(environments[0])
+    observation_space_shape = gym_env.observation_space.shape
+    action_space_n = gym_env.action_space.n
+    full_action_space = False
+    for environment in environments[1:]:
+        gym_env = create_env(environment)
+        if gym_env.action_space.n != action_space_n:
+            logging.warning("Action spaces don't match, using full action space.")
+            full_action_space = True
+            action_space_n = 18
+            break
 
     # create the model and the buffers to pass around data between actors and learner
-    model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm)
-    buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
+    model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm)
+    buffers = create_buffers(flags, observation_space_shape, model.num_actions)
 
     # I'm guessing that this is required (similarly to the buffers) so that the
     # different threads/processes can all have access to the parameters etc. (?)
@@ -445,13 +456,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
-    for i, env in enumerate(environments):
+    for i, environment in enumerate(environments):
         for j in range(flags.num_actors):
             actor = ctx.Process(
                 target=act,
                 args=(
                     flags,
-                    env,
+                    environment,
                     i*flags.num_actors + j,
                     free_queue,
                     full_queue,
@@ -463,7 +474,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             actor.start()
             actor_processes.append(actor)
 
-    learner_model = Net(env.observation_space.shape, env.action_space.n, use_lstm=flags.use_lstm).to(device=flags.device)
+    learner_model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm).to(device=flags.device)
 
     # the hyperparameters in the paper are found/adjusted using population-based training,
     # which might be a bit too difficult for us to do; while the IMPALA paper also does
