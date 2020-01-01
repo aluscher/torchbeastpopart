@@ -481,7 +481,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 args=(
                     flags,
                     environment,
-                    full_action_space
+                    full_action_space,
                     i*flags.num_actors + j,
                     free_queue,
                     full_queue,
