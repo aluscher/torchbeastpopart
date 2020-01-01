@@ -199,14 +199,29 @@ class AttentionAugmentedAgent(nn.Module):
             c_k: int = 8,
             c_s: int = 64,
             num_queries: int = 4,
+            rgb_last: bool = False,
             **kwargs
     ):
-        """Agent implementing the attention agent."""
         super(AttentionAugmentedAgent, self).__init__()
         self.hidden_size = hidden_size
         self.observation_shape = observation_shape
         self.num_actions = num_actions
+        self.rgb_last = rgb_last
         self.c_v, self.c_k, self.c_s, self.num_queries = c_v, c_k, c_s, num_queries
+        if self.rgb_last:
+            self.observation_shape = (3,) + tuple(self.observation_shape[1:])
+
+        self.config = {
+            "observation_shape": observation_shape,
+            "num_actions": num_actions,
+            "hidden_size": hidden_size,
+            "c_v": c_v,
+            "c_k": c_k,
+            "c_s": c_s,
+            "num_queries": num_queries,
+            "rgb_last": rgb_last
+        }
+        self.config.update(kwargs)
 
         self.vision = VisionNetwork(self.observation_shape[1], self.observation_shape[2],
                                     in_channels=self.observation_shape[0])
@@ -222,8 +237,8 @@ class AttentionAugmentedAgent(nn.Module):
 
         self.policy_core = nn.LSTM(hidden_size, hidden_size)
 
-        self.policy_head = nn.Sequential(nn.Linear(hidden_size, num_actions))
-        self.values_head = nn.Sequential(nn.Linear(hidden_size, 1))
+        self.policy_head = nn.Linear(hidden_size, num_actions)
+        self.baseline_head = nn.Linear(hidden_size, 1)
 
     def initial_state(self, batch_size):
         dummy_frame = torch.zeros(1, *self.observation_shape)
@@ -237,7 +252,7 @@ class AttentionAugmentedAgent(nn.Module):
         )
         return vision_core_initial_state + policy_core_initial_state
 
-    def forward(self, inputs, state=()):
+    def forward(self, inputs, state=(), return_attention_maps=False):
         # input frames are formatted: (time_steps, batch_size, frame_stack, height, width)
         # the original network is designed for (batch_size, height, width, num_channels)
         # there are a couple options to solve this:
@@ -256,6 +271,9 @@ class AttentionAugmentedAgent(nn.Module):
         x = x.float() / 255.0
         # (time_steps, batch_size, height, width, frame_stack) to match the design of the network
         x = x.permute(0, 1, 3, 4, 2)
+        # frames are RGB and only the first should be used
+        if self.rgb_last:
+            x = x[:, :, :, :, -3:]
 
         # (time_steps, batch_size, 1)
         prev_reward = inputs["reward"].view(time_steps, batch_size, 1)
@@ -300,6 +318,7 @@ class AttentionAugmentedAgent(nn.Module):
         values = values.view(time_steps, batch_size, *values.shape[1:])
 
         policy_core_output_list = []
+        attention_map_list = []
         policy_core_state = state[2:]
         for keys_batch, values_batch, prev_reward_batch, prev_action_batch, not_done_batch in zip(
                 keys.unbind(), values.unbind(), prev_reward.unbind(), prev_action.unbind(), not_done.unbind()):
@@ -320,6 +339,7 @@ class AttentionAugmentedAgent(nn.Module):
             answer = torch.matmul(keys_batch, queries.transpose(2, 1).unsqueeze(1))
             # (batch_size, height_ac, width_ac, num_queries)
             answer = spatial_softmax(answer)
+            attention_map_list.append(answer)
             # (batch_size, num_queries, c_v + c_s)
             answer = apply_alpha(answer, values_batch)
 
@@ -345,13 +365,14 @@ class AttentionAugmentedAgent(nn.Module):
 
         # (time_steps * batch_size, hidden_size)
         output = torch.cat(policy_core_output_list)
+        attention_maps = torch.cat(attention_map_list)
 
         # 4, 5. Outputs.
         # --------------
         # (time_steps * batch_size, num_actions)
         policy_logits = self.policy_head(output)
         # (time_steps * batch_size, 1)
-        baseline = self.values_head(output)
+        baseline = self.baseline_head(output)
 
         # (time_steps * batch_size, 1)
         if self.training:
@@ -365,6 +386,13 @@ class AttentionAugmentedAgent(nn.Module):
         baseline = baseline.view(time_steps, batch_size)
         # (time_steps, batch_size)
         action = action.view(time_steps, batch_size)
+
+        if return_attention_maps:
+            return (
+                dict(policy_logits=policy_logits, baseline=baseline, action=action),
+                vision_core_state + policy_core_state,
+                attention_maps
+            )
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),

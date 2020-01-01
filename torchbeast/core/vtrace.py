@@ -63,20 +63,30 @@ def from_logits(
     rewards,
     values,
     bootstrap_value,
+    normalized_values=None,
+    mu=None,
+    sigma=None,
     clip_rho_threshold=1.0,
     clip_pg_rho_threshold=1.0,
 ):
     """V-trace for softmax policies."""
-
+    device = target_policy_logits.device
     target_action_log_probs = action_log_probs(target_policy_logits, actions)
     behavior_action_log_probs = action_log_probs(behavior_policy_logits, actions)
     log_rhos = target_action_log_probs - behavior_action_log_probs
+    if mu is None:
+        mu = torch.zeros(1).to(device)
+        sigma = torch.ones(1).to(device)
+        normalized_values = values
     vtrace_returns = from_importance_weights(
         log_rhos=log_rhos,
         discounts=discounts,
         rewards=rewards,
         values=values,
+        normalized_values=normalized_values,
         bootstrap_value=bootstrap_value,
+        mu=mu,
+        sigma=sigma,
         clip_rho_threshold=clip_rho_threshold,
         clip_pg_rho_threshold=clip_pg_rho_threshold,
     )
@@ -94,7 +104,10 @@ def from_importance_weights(
     discounts,
     rewards,
     values,
+    normalized_values,
     bootstrap_value,
+    mu,
+    sigma,
     clip_rho_threshold=1.0,
     clip_pg_rho_threshold=1.0,
 ):
@@ -111,6 +124,7 @@ def from_importance_weights(
         values_t_plus_1 = torch.cat(
             [values[1:], torch.unsqueeze(bootstrap_value, 0)], dim=0
         )
+
         deltas = clipped_rhos * (rewards + discounts * values_t_plus_1 - values)
 
         acc = torch.zeros_like(bootstrap_value)
@@ -133,7 +147,9 @@ def from_importance_weights(
             clipped_pg_rhos = torch.clamp(rhos, max=clip_pg_rho_threshold)
         else:
             clipped_pg_rhos = rhos
-        pg_advantages = clipped_pg_rhos * (rewards + discounts * vs_t_plus_1 - values)
+
+        #pg_advantages = clipped_pg_rhos * (rewards + discounts * vs_t_plus_1 - values)
+        pg_advantages = clipped_pg_rhos * (((rewards + discounts * vs_t_plus_1) - mu) / sigma - normalized_values)
 
         # Make sure no gradients backpropagated through the returned values.
         return VTraceReturns(vs=vs, pg_advantages=pg_advantages)

@@ -73,6 +73,12 @@ parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
 parser.add_argument("--agent_type", type=str, default="aaa",
                     help="The type of network to use for the agent.")
+parser.add_argument("--frame_height", type=int, default=84,
+                    help="Height to which frames are rescaled.")
+parser.add_argument("--frame_width", type=int, default=84,
+                    help="Width to which frames are rescaled.")
+parser.add_argument("--aaa_input_format", type=str, default="gray_stack", choices=["gray_stack", "rgb_last", "rgb_stack"],
+                    help="Color format of the frames as input for the AAA.")
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.0006,
@@ -96,6 +102,14 @@ parser.add_argument("--epsilon", default=0.01, type=float,
                     help="RMSProp epsilon.")
 parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
+
+# Misc settings.
+parser.add_argument("--write_profiler_trace", action="store_true",
+                    help="Collect and write a profiler trace "
+                    "for chrome://tracing/.")
+parser.add_argument("--save_model_every_nsteps", default=0, type=int,
+                    help="Save model every n steps")
+
 # yapf: enable
 
 
@@ -147,7 +161,8 @@ def act(
 
         # create the environment from command line parameters
         # => could also create a special one which operates on a list of games (which we need)
-        gym_env = create_env(env, full_action_space)
+        gym_env = create_env(env, frame_height=flags.frame_height, frame_width=flags.frame_width,
+                             gray_scale=(flags.aaa_input_format == "gray_stack"), full_action_space=full_action_space)
         # NOTE: this part of the act() function is only called once when the actor thread/process
         # is started, so it would probably not be a good idea to just distribute the different
         # games over different environments, but that each environment contains all games
@@ -274,6 +289,7 @@ def learn(
     initial_agent_state,
     optimizer,
     scheduler,
+    stats,
     lock=threading.Lock(),
 ):
     """Performs a learning (optimization) step."""
@@ -334,14 +350,13 @@ def learn(
 
         # get the returns only for finished episodes (where the game was played to completion)
         episode_returns = batch["episode_return"][batch["done"]]
-        stats = {
-            "episode_returns": tuple(episode_returns.cpu().numpy()),
-            "mean_episode_return": torch.mean(episode_returns).item(),
-            "total_loss": total_loss.item(),
-            "pg_loss": pg_loss.item(),
-            "baseline_loss": baseline_loss.item(),
-            "entropy_loss": entropy_loss.item(),
-        }
+        stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
+        stats["mean_episode_return"] = torch.mean(episode_returns).item()
+        stats["total_loss"] = total_loss.item()
+        stats["pg_loss"] = pg_loss.item()
+        stats["baseline_loss"] = baseline_loss.item()
+        stats["entropy_loss"] = entropy_loss.item()
+        stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
 
         # do the backward pass (WITH GRADIENT NORM CLIPPING) and adjust hyperparameters (scheduler, ?)
         optimizer.zero_grad()
@@ -392,6 +407,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     checkpointpath = os.path.expandvars(
         os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
     )
+    if flags.save_model_every_nsteps > 0:
+        os.makedirs(checkpointpath.replace("model.tar", "intermediate"), exist_ok=True)
 
     if flags.num_buffers is None:  # Set sensible default for num_buffers.
         flags.num_buffers = max(2 * flags.num_actors, flags.batch_size)
@@ -422,7 +439,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     environments = flags.env.split(",")
 
     # create a dummy environment, mostly to get the observation and action spaces from
-    gym_env = create_env(environments[0])
+    gym_env = create_env(environments[0], frame_height=flags.frame_height, frame_width=flags.frame_width,
+                     gray_scale=(flags.aaa_input_format == "gray_stack"))
     observation_space_shape = gym_env.observation_space.shape
     action_space_n = gym_env.action_space.n
     full_action_space = False
@@ -435,7 +453,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             break
 
     # create the model and the buffers to pass around data between actors and learner
-    model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm)
+    model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm, rgb_last=(flags.aaa_input_format == "rgb_last"))
     buffers = create_buffers(flags, observation_space_shape, model.num_actions)
 
     # I'm guessing that this is required (similarly to the buffers) so that the
@@ -463,6 +481,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 args=(
                     flags,
                     environment,
+                    full_action_space
                     i*flags.num_actors + j,
                     free_queue,
                     full_queue,
@@ -474,7 +493,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             actor.start()
             actor_processes.append(actor)
 
-    learner_model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm).to(device=flags.device)
+    learner_model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm,
+                        rgb_last=(flags.aaa_input_format == "rgb_last")).to(device=flags.device)
 
     # the hyperparameters in the paper are found/adjusted using population-based training,
     # which might be a bit too difficult for us to do; while the IMPALA paper also does
@@ -520,7 +540,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 initial_agent_state_buffers,
                 timings,
             )
-            stats = learn(flags, model, learner_model, batch, agent_state, optimizer, scheduler)
+            s = learn(flags, model, learner_model, batch, agent_state, optimizer, scheduler, stats)
             timings.time("learn")
             with lock:
                 to_log = dict(step=step)
@@ -556,19 +576,41 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             checkpointpath,
         )
 
+    def save_model():
+        save_model_path = checkpointpath.replace(
+            "model.tar", "intermediate/model." + str(stats.get("step", 0)).zfill(9) + ".tar")
+        logging.info("Saving model to %s", save_model_path)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "stats": stats,
+                "flags": vars(flags),
+            },
+            save_model_path,
+        )
+
     timer = timeit.default_timer
     try:
         last_checkpoint_time = timer()
+        last_savemodel_nsteps = 0
         while step < flags.total_steps:
-            start_step = step
+            start_step = stats.get("step", 0)
             start_time = timer()
             time.sleep(5)
+            end_step = stats.get("step", 0)
 
             if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min. TODO: probably change this to count steps
                 checkpoint()
                 last_checkpoint_time = timer()
 
-            sps = (step - start_step) / (timer() - start_time)
+            if flags.save_model_every_nsteps > 0 and end_step >= last_savemodel_nsteps + flags.save_model_every_nsteps:
+                # save model every save_model_every_nsteps steps
+                save_model()
+                last_savemodel_nsteps = end_step
+
+            sps = (end_step - start_step) / (timer() - start_time)
             if stats.get("episode_returns", None):
                 mean_return = ("Return per episode: %.1f. " % stats["mean_episode_return"])
             else:
@@ -576,7 +618,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             total_loss = stats.get("total_loss", float("inf"))
             logging.info(
                 "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
-                step,
+                end_step,
                 sps,
                 total_loss,
                 mean_return,
@@ -615,9 +657,11 @@ def test(flags, num_episodes: int = 10):
     if len(flags.env.split(",")) != 1:
         raise Exception("Only one environment allowed for testing")
 
-    gym_env = create_env(flags.env)
+    gym_env = create_env(flags.env, frame_height=flags.frame_height, frame_width=flags.frame_width,
+                         gray_scale=(flags.aaa_input_format == "gray_stack"))
     env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm)
+    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm,
+                rgb_last=(flags.aaa_input_format == "rgb_last"))
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -740,12 +784,15 @@ class AtariNet(nn.Module):
 Net = AttentionAugmentedAgent
 
 
-def create_env(env, full_action_space=False):
+def create_env(env, frame_height=84, frame_width=84, gray_scale=True, full_action_space=False):
     return atari_wrappers.wrap_pytorch(
         atari_wrappers.wrap_deepmind(
             atari_wrappers.make_atari(env, full_action_space=full_action_space),
             clip_rewards=False,
             frame_stack=True,
+            frame_height=frame_height,
+            frame_width=frame_width,
+            gray_scale=gray_scale,
             scale=False,
         )
     )
