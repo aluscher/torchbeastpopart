@@ -37,6 +37,7 @@ from torchbeast.core import prof
 from torchbeast.core import vtrace
 
 from torchbeast.attention_augmented_agent import AttentionAugmentedAgent
+from torchbeast.resnet_monobeast import ResNet
 
 
 # yapf: disable
@@ -431,6 +432,9 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     if flags.agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
         Net = AttentionAugmentedAgent
         logging.info("Using the Attention-Augmented Agent architecture.")
+    elif flags.agent_type.lower() in ["rn", "res", "resnet", "res_net"]:
+        Net = ResNet
+        logging.info("Using the ResNet architecture (monobeast version).")
     else:
         Net = AtariNet
         logging.warning("No valid agent type specified. Using the default agent.")
@@ -471,7 +475,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 args=(
                     flags,
                     e,
-                    i*flags.num_actors + j,
+                    i * flags.num_actors + j,
                     free_queue,
                     full_queue,
                     model,
@@ -639,6 +643,9 @@ def test(flags, num_episodes: int = 10):
     if flags.agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
         Net = AttentionAugmentedAgent
         logging.info("Using the Attention-Augmented Agent architecture.")
+    elif flags.agent_type.lower() in ["rn", "res", "resnet", "res_net"]:
+        Net = ResNet
+        logging.info("Using the ResNet architecture (monobeast version).")
     else:
         Net = AtariNet
         logging.warning("No valid agent type specified. Using the default agent.")
