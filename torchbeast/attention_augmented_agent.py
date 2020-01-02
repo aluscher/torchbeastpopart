@@ -241,8 +241,11 @@ class AttentionAugmentedAgent(nn.Module):
         self.baseline_head = nn.Linear(hidden_size, 1)
 
     def initial_state(self, batch_size):
-        dummy_frame = torch.zeros(1, *self.observation_shape)
-        vision_core_initial_state = tuple(s.unsqueeze(0) for s in self.vision.initial_state(batch_size, dummy_frame))
+        with torch.no_grad():
+            dummy_frame = torch.zeros(1, *self.observation_shape)
+            vision_core_initial_state = tuple(
+                s.unsqueeze(0) for s in self.vision.initial_state(batch_size, dummy_frame)
+            )
         # unsqueeze() here as well as in forward() is necessary because some of the code in monobeast.py assumes that
         # the first dimension of the returned state tensors are layers of the RNN, so we need this "dummy dimension"
 
