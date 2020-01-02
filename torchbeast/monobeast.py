@@ -349,16 +349,6 @@ def learn(
 
         total_loss = pg_loss + baseline_loss + entropy_loss
 
-        # get the returns only for finished episodes (where the game was played to completion)
-        episode_returns = batch["episode_return"][batch["done"]]
-        stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
-        stats["mean_episode_return"] = torch.mean(episode_returns).item()
-        stats["total_loss"] = total_loss.item()
-        stats["pg_loss"] = pg_loss.item()
-        stats["baseline_loss"] = baseline_loss.item()
-        stats["entropy_loss"] = entropy_loss.item()
-        stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
-
         # do the backward pass (WITH GRADIENT NORM CLIPPING) and adjust hyperparameters (scheduler, ?)
         optimizer.zero_grad()
         total_loss.backward()
@@ -368,6 +358,16 @@ def learn(
 
         # update the actor model with the new parameters
         actor_model.load_state_dict(model.state_dict())
+
+        # get the returns only for finished episodes (where the game was played to completion)
+        episode_returns = batch["episode_return"][batch["done"]]
+        stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
+        stats["mean_episode_return"] = torch.mean(episode_returns).item()
+        stats["total_loss"] = total_loss.item()
+        stats["pg_loss"] = pg_loss.item()
+        stats["baseline_loss"] = baseline_loss.item()
+        stats["entropy_loss"] = entropy_loss.item()
+        stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
 
         return stats
 

@@ -230,7 +230,7 @@ class AttentionAugmentedAgent(nn.Module):
 
         self.answer_processor = nn.Sequential(
             # 1031 x 512
-            nn.Linear((c_v + c_s) * num_queries + (c_k + c_s) * num_queries + 1 + num_actions, 512),
+            nn.Linear((c_v + c_s) * num_queries + (c_k + c_s) * num_queries + 1 + 1, 512),
             nn.ReLU(),
             nn.Linear(512, hidden_size),
         )
@@ -278,7 +278,8 @@ class AttentionAugmentedAgent(nn.Module):
         # (time_steps, batch_size, 1)
         prev_reward = inputs["reward"].view(time_steps, batch_size, 1)
         # (time_steps, batch_size, num_actions)
-        prev_action = F.one_hot(inputs["last_action"].view(time_steps, batch_size), self.num_actions).float()
+        # prev_action = F.one_hot(inputs["last_action"].view(time_steps, batch_size), self.num_actions).float()
+        prev_action = inputs["last_action"].view(time_steps, batch_size, 1)
         # (time_steps, batch_size)
         not_done = (~inputs["done"]).float()
 
