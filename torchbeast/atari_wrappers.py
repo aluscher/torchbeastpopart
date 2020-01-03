@@ -376,3 +376,39 @@ class ImageToPyTorchTask(ImageToPyTorch):
 
 def wrap_pytorch_task(env, task=0):
     return ImageToPyTorchTask(env, task=task)
+
+
+class NoopResetEnvDet(gym.Wrapper):
+    def __init__(self, env, noop=30):
+        """Sample initial states by taking random number of no-ops on reset.
+        No-op is assumed to be action 0.
+        """
+        gym.Wrapper.__init__(self, env)
+        self.noop = noop
+        self.noop_action = 0
+        assert env.unwrapped.get_action_meanings()[0] == 'NOOP'
+
+    def reset(self, **kwargs):
+        """ Do no-op action for a number of steps noop."""
+        self.env.reset(**kwargs)
+        noops = self.noop
+        obs = None
+        for _ in range(noops):
+            obs, _, done, _ = self.env.step(self.noop_action)
+            if done:
+                obs = self.env.reset(**kwargs)
+        return obs
+
+    def step(self, ac):
+        return self.env.step(ac)
+
+
+def make_atari_det(env_id, max_episode_steps=None, full_action_space=False, noop=10):
+    env = gym.make(env_id, full_action_space=full_action_space)
+    assert 'NoFrameskip' in env.spec.id
+    env = NoopResetEnvDet(env, noop=noop)
+    env = MaxAndSkipEnv(env, skip=4)
+
+    assert max_episode_steps is None
+
+    return env

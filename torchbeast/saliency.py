@@ -5,8 +5,9 @@ import logging
 import os
 import time
 import warnings
+import re
 
-warnings.filterwarnings("ignore")  # mute warnings, live dangerously ;)
+from PIL import Image
 
 import torch
 
@@ -30,11 +31,13 @@ parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
+parser.add_argument("--intermediate_model_id", default=None,
+                    help="id for intermediate model: model.id.tar")
 parser.add_argument("--env", type=str, default="PongNoFrameskip-v4",
                     help="Gym environment.")
-parser.add_argument("--num_frames", default=50, type=int,
+parser.add_argument("--num_frames", default=10000, type=int,
                     help=".")
-parser.add_argument("--first_frame", default=200, type=int,
+parser.add_argument("--first_frame", default=0, type=int,
                     help=".")
 parser.add_argument("--resolution", default=75, type=int,
                     help=".")
@@ -42,8 +45,12 @@ parser.add_argument("--density", default=2, type=int,
                     help=".")
 parser.add_argument("--radius", default=2, type=int,
                     help=".")
-parser.add_argument("--saliencydir", default="./movies/",
+parser.add_argument("--saliencydir", default="./movies/saliency_raw",
                     help=".")
+parser.add_argument("--actions",
+                    help=".")
+
+
 
 logging.basicConfig(
     format=(
@@ -72,25 +79,28 @@ def occlude(image, mask):
     return image * (1 - mask) + imagep * mask
 
 
-def rollout(model, env, max_ep_len=3e3, render=False):
-    history = {"observation": [], "policy": [], "baseline": [], "core_state": [], "image": []}
+def rollout(model, env, max_ep_len=3e3, actions=None):
+    history = {"observation": [], "policy": [], "baseline": [], "normalized_baseline": [], "core_state": [], "image": []}
     episode_length, epr, eploss, done = 0, 0, 0, False  # bookkeeping
 
     observation = env.initial()
 
     with torch.no_grad():
         while not done and episode_length <= max_ep_len:
-            episode_length += 1
             agent_outputs = model(observation, torch.tensor)
             policy_outputs, core_state = agent_outputs
-            observation = env.step(policy_outputs[0])
+            action = policy_outputs[0] if actions is None else torch.tensor(actions[episode_length])
+            observation = env.step(action)
             done = observation["done"]
 
             history["observation"].append(observation)
             history["policy"].append(policy_outputs[1].data.numpy()[0])
             history["baseline"].append(policy_outputs[2].data.numpy()[0])
+            history["normalized_baseline"].append(policy_outputs[3].data.numpy()[0])
             history["core_state"].append(core_state)
             history["image"].append(env.gym_env.render(mode='rgb_array'))
+
+            episode_length += 1
 
     return history
 
@@ -105,7 +115,7 @@ def get_mask(center, size, r):
     return np.array([m, m, m, m])
 
 
-def run_through_model(model, history, ix, interp_func=None, mask=None, mode="policy", i=0, j=0):
+def run_through_model(model, history, ix, interp_func=None, mask=None, mode="policy", task=0):
     observation = history["observation"][ix].copy()
     frame = observation["frame"].squeeze().numpy() / 255.
 
@@ -119,22 +129,22 @@ def run_through_model(model, history, ix, interp_func=None, mask=None, mode="pol
         policy_outputs, _ = model(observation, core_state)
     policy = policy_outputs[1]
     baseline = policy_outputs[2]
+    return policy if mode == "policy" else baseline[:, :, task]
 
-    return baseline if mode == "baseline" else policy
 
-
-def score_frame(model, history, ix, r, d, interp_func, mode="policy"):
+def score_frame(model, history, ix, r, d, interp_func, mode="policy", task=0):
     # r: radius of blur
     # d: density of scores (if d==1, then get a score for every pixel...
     #    if d==2 then every other, which is 25% of total pixels for a 2D image)
 
-    L = run_through_model(model, history, ix, interp_func, mask=None, mode=mode)
+    L = run_through_model(model, history, ix, interp_func, mask=None, mode=mode, task=task)
+
     # saliency scores S(t,i,j)
     scores = np.zeros((int(84 / d) + 1, int(84 / d) + 1))
     for i in range(0, 84, d):
         for j in range(0, 84, d):
             mask = get_mask(center=[i, j], size=[84, 84], r=r)
-            l = run_through_model(model, history, ix, interp_func, mask=mask, mode=mode, i=i, j=j)
+            l = run_through_model(model, history, ix, interp_func, mask=mask, mode=mode, task=task)
             scores[int(i / d), int(j / d)] = (L - l).pow(2).sum().mul_(.5).item()
     pmax = scores.max()
     scores = imresize(scores, (84, 84)).astype(np.float32)
@@ -143,102 +153,126 @@ def score_frame(model, history, ix, r, d, interp_func, mode="policy"):
     return scores
 
 
-def saliency_on_atari_frame(saliency, frame, fudge_factor, channel=2, sigma=0):
-    # sometimes saliency maps are a bit clearer if you blur them
-    # slightly...sigma adjusts the radius of that blur
-
-    pmax = saliency.max()
-
+def saliency_on_atari_frame(saliency, channel=0):
     S = imresize(saliency, (160, 160))
-    #S = S if sigma == 0 else gaussian_filter(S, sigma=sigma)
-    #S -= S.min();
-    S = fudge_factor * pmax * S / S.max()
-
-    image = frame.astype('uint16')
+    S = ( S - S.min() ) / S.max() * 255.
+    image = np.zeros([210, 160, 3], dtype='uint16')
     image[25:185, :, channel] += S.astype('uint16')
-    image = image.clip(1, 255).astype('uint8')
+    image = image.clip(0, 255).astype('uint8')
 
     return image
 
 
-def get_env_meta(env_name):
-    meta = {}
-    if env_name == "PongNoFrameskip-v4":
-        meta["baseline_ff"] = 600;
-        meta["policy_ff"] = 500
-    elif env_name == "SpaceInvadersNoFrameskip-v4":
-        meta["baseline_ff"] = 400;
-        meta["policy_ff"] = 400
-    elif env_name == "AirRaidNoFrameskip-v4":
-        meta["baseline_ff"] = 400;
-        meta["policy_ff"] = 400
-    else:
-        print("environment '{}' not supported".format(env_name))
-    return meta
-
-
 def make_movie(model, env, flags):
-    movie_title = "{}_{}_{}_{}_{}.mp4".format("saliency", flags.env, flags.xpid, flags.first_frame, flags.num_frames)
+
+    actions = []
+    if flags.actions is not None:
+        f = open(flags.actions, "r")
+        for line in f:
+            actions.append(int(line.replace("tensor([[[", "").replace("]]])", "")))
+        f.close()
+
     max_ep_len = flags.first_frame + flags.num_frames + 1
+
     torch.manual_seed(0)
-    history = rollout(model, env, max_ep_len=max_ep_len)
+    history = rollout(model, env, max_ep_len=max_ep_len, actions=actions)
 
-    start = time.time()
-    FFMpegWriter = manimation.writers["ffmpeg"]
-    metadata = dict(title=movie_title, artist="", comment="atari-saliency-video")
-    writer = FFMpegWriter(fps=8, metadata=metadata)
-
-    prog = "";
     total_frames = len(history["observation"])
-    f = plt.figure(figsize=[6, 6 * 1.3], dpi=flags.resolution)
 
-    moviepath = os.path.expandvars(
+    saliencypath = os.path.expandvars(
         os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, flags.saliencydir))
     )
-    if not os.path.exists(moviepath):
-        os.makedirs(moviepath)
-    with writer.saving(f, moviepath + "/" + movie_title, flags.resolution):
-        for i in range(flags.num_frames):
-            ix = flags.first_frame + i
-            if ix < total_frames:  # prevent loop from trying to process a frame ix greater than rollout length
+    if not os.path.exists(saliencypath):
+        os.makedirs(saliencypath)
 
-                policy_saliency = score_frame(model, history, ix, flags.radius, flags.density, interp_func=occlude, mode="policy")
-                baseline_saliency = score_frame(model, history, ix, flags.radius, flags.density, interp_func=occlude, mode="baseline")
+    for i in range(flags.num_frames):
+        ix = flags.first_frame + i
 
-                frame = history["image"][ix]
-                frame = saliency_on_atari_frame(policy_saliency, frame, fudge_factor=get_env_meta(flags.env)["policy_ff"], channel=2)
-                frame = saliency_on_atari_frame(baseline_saliency, frame, fudge_factor=get_env_meta(flags.env)["baseline_ff"], channel=0)
+        if ix < total_frames:
+            policy_saliency = score_frame(model, history, ix, flags.radius, flags.density, interp_func=occlude, mode="policy", task=flags.task)
+            baseline_saliency = score_frame(model, history, ix, flags.radius, flags.density, interp_func=occlude, mode="baseline", task=flags.task)
 
-                plt.imshow(frame);
-                plt.title(flags.env, fontsize=15, fontname='DejaVuSans')
-                plt.axis('off')
-                writer.grab_frame();
-                f.clear()
+            frame_policy_saliency = saliency_on_atari_frame(policy_saliency, channel=0)
+            frame_baseline_saliency = saliency_on_atari_frame(baseline_saliency, channel=2)
 
-                tstr = time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - start))
-                print("\ttime: {} | progress: {:.1f}%".format(tstr, 100 * i / min(flags.num_frames, total_frames)),
-                      end="\r")
+            frame_atari = history["image"][ix]
+            filename = saliencypath + "/" + "{}_{}_{}_{}_{}".format("Atari", flags.xpid, flags.intermediate_model_id, flags.env, str(ix).zfill(5)) + ".png"
+            im = Image.fromarray(frame_atari).resize([160, 210])
+            im.save(filename)
+
+            frame_saliency = frame_policy_saliency + frame_baseline_saliency
+            filename = saliencypath + "/" + "{}_{}_{}_{}_{}".format("Saliency", flags.xpid, flags.intermediate_model_id, flags.env, str(ix).zfill(5)) + ".png"
+            im = Image.fromarray(frame_saliency)
+            im.save(filename)
+
+            print("\tprogress: {:.1f}%".format(100 * i / min(flags.num_frames, total_frames)), end="\r")
     print("\nfinished.")
+
+
+def create_env_det(env_name, full_action_space=False, noop=20):
+    return tb.atari_wrappers.wrap_pytorch(
+        tb.atari_wrappers.wrap_deepmind(
+            tb.atari_wrappers.make_atari_det(env_name, full_action_space=full_action_space, noop=noop),
+            clip_rewards=False,
+            frame_stack=True,
+            scale=False,
+        )
+    )
+
+
+task_map = {
+    "AirRaidNoFrameskip-v4": 0
+    , "CarnivalNoFrameskip-v4": 1
+    , "DemonAttackNoFrameskip-v4": 2
+    , "NameThisGameNoFrameskip-v4": 3
+    , "PongNoFrameskip-v4": 4
+    , "SpaceInvadersNoFrameskip-v4": 5
+}
 
 
 if __name__ == "__main__":
     flags = parser.parse_args()
 
     if flags.xpid is None:
-        checkpointpath = "./latest/model.tar"
-    else:
         checkpointpath = os.path.expandvars(
-            os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
+            os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar"))
         )
+    else:
+        if flags.intermediate_model_id is None:
+            checkpointpath = os.path.expandvars(
+                os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
+            )
+        else:
+            checkpointpath = os.path.expandvars(
+                os.path.expanduser("%s/%s/%s/%s" % (flags.savedir, flags.xpid, "intermediate", "model." + flags.intermediate_model_id + ".tar"))
+            )
 
-    gym_env = tb.create_env(flags)
-    env = tb.environment.Environment(gym_env)
-    model = tb.Net(gym_env.action_space.n, flags.use_lstm)
+    flags_orig = tb.read_metadata(re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+    args_orig = flags_orig["args"]
+    num_actions = args_orig.get("num_actions")
+    num_tasks = args_orig.get("num_tasks", 1)
+    use_lstm = args_orig.get("use_lstm", False)
+    use_popart = args_orig.get("use_popart", False)
+    reward_clipping = args_orig.get("reward_clipping", "abs_one")
+
+    task = 0
+    if num_tasks > 1:
+        task = task_map[flags.env]
+    flags.task = task
+
+    gym_env = create_env_det(flags.env)
+    gym_env.seed(0)
+    env = tb.Environment(gym_env)
+    model = tb.Net(num_actions=num_actions, num_tasks=num_tasks, use_lstm=use_lstm, use_popart=use_popart, reward_clipping=reward_clipping)
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
+    if 'baseline.mu' not in checkpoint["model_state_dict"]:
+        checkpoint["model_state_dict"]["baseline.mu"] = torch.zeros(1)
+        checkpoint["model_state_dict"]["baseline.sigma"] = torch.ones(1)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     logging.info(
         "making movie using checkpoint at %s %s", flags.savedir, flags.xpid
     )
+    flags.use_popart = use_popart
     make_movie(model, env, flags)
