@@ -25,6 +25,8 @@ import traceback
 
 import re
 
+from PIL import Image
+
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
@@ -51,7 +53,7 @@ parser.add_argument("--pipes_basename", default="unix:/tmp/polybeast",
                     help="Basename for the pipes for inter-process communication. "
                     "Has to be of the type unix:/some/path.")
 parser.add_argument("--mode", default="train",
-                    choices=["train", "test", "test_render", "env_info"],
+                    choices=["train", "test", "test_render", "record", "env_info"],
                     help="Training or test mode.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
@@ -68,17 +70,17 @@ parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
 parser.add_argument("--savedir", default="./logs/torchbeast-local",
                     help="Root dir where experiment data will be saved.")
-parser.add_argument("--num_actors", default=8, type=int, metavar="N",
+parser.add_argument("--num_actors", default=16, type=int, metavar="N",
                     help="Number of actors.")
-parser.add_argument("--total_steps", default=1000000, type=int, metavar="T",
+parser.add_argument("--total_steps", default=10000000, type=int, metavar="T",
                     help="Total environment steps to train for.")
 parser.add_argument("--batch_size", default=8, type=int, metavar="B",
                     help="Learner batch size.")
 parser.add_argument("--unroll_length", default=80, type=int, metavar="T",
                     help="The unroll length (time dimension).")
-parser.add_argument("--num_learner_threads", default=1, type=int,
+parser.add_argument("--num_learner_threads", default=2, type=int,
                     metavar="N", help="Number learner threads.")
-parser.add_argument("--num_inference_threads", default=1, type=int,
+parser.add_argument("--num_inference_threads", default=2, type=int,
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
@@ -128,6 +130,8 @@ parser.add_argument("--num_episodes", default=100, type=int,
                     help="Number of episodes for Testing.")
 parser.add_argument("--intermediate_model_id", default=None,
                     help="id for intermediate model: model.id.tar")
+parser.add_argument("--actions",
+                    help="Use given action sequence.")
 
 # yapf: enable
 
@@ -332,7 +336,7 @@ class Net(nn.Module):
 
         if self.reward_clipping == "abs_one":
             clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
-        elif self.reward_clipping == "none":
+        elif self.use_popart:
             clipped_reward = inputs["reward"].view(T * B, 1)
 
         core_input = torch.cat([x, clipped_reward], dim=-1)
@@ -767,6 +771,9 @@ def test(flags):
     model = Net(num_actions=num_actions, num_tasks=num_tasks, use_lstm=use_lstm, use_popart=use_popart, reward_clipping=reward_clipping)
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
+    if 'baseline.mu' not in checkpoint["model_state_dict"]:
+        checkpoint["model_state_dict"]["baseline.mu"] = torch.zeros(1)
+        checkpoint["model_state_dict"]["baseline.sigma"] = torch.ones(1)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     full_action_space = False
@@ -786,7 +793,9 @@ def test(flags):
                 env.gym_env.render()
             agent_outputs = model(observation, torch.tensor)
             policy_outputs, _ = agent_outputs
-            observation = env.step(policy_outputs[0])
+            #observation = env.step(policy_outputs[0])
+            action = torch.tensor(np.random.randint(0, num_actions))
+            observation = env.step(action)
             if observation["done"].item():
                 returns.append(observation["episode_return"].item())
                 logging.info(
@@ -794,13 +803,82 @@ def test(flags):
                     observation["episode_step"].item(),
                     observation["episode_return"].item(),
                 )
-                print("Episode ended after", observation["episode_step"].item(), "steps. Return:", observation["episode_return"].item(), flush=True)
+                print(flags.xpid, flags.intermediate_model_id,  flags.env, observation["episode_step"].item(), observation["episode_return"].item(), sep=",", flush=True)
             i = i + 1
 
     env.close()
     logging.info(
         "Average returns over %i steps: %.1f", flags.num_episodes, sum(returns) / len(returns)
     )
+
+
+def record(flags):
+    torch.manual_seed(0)
+    if flags.xpid is None:
+        checkpointpath = os.path.expandvars(
+            os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar"))
+        )
+    else:
+        if flags.intermediate_model_id is None:
+            checkpointpath = os.path.expandvars(
+                os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
+            )
+        else:
+            checkpointpath = os.path.expandvars(
+                os.path.expanduser("%s/%s/%s/%s" % (flags.savedir, flags.xpid, "intermediate", "model." + flags.intermediate_model_id + ".tar"))
+            )
+    flags_orig = read_metadata(re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+    args_orig = flags_orig["args"]
+    num_actions = args_orig.get("num_actions")
+    num_tasks = args_orig.get("num_tasks", 1)
+    use_lstm = args_orig.get("use_lstm", False)
+    use_popart = args_orig.get("use_popart", False)
+    reward_clipping = args_orig.get("reward_clipping", "abs_one")
+
+    actions = []
+    if flags.actions is not None:
+        f = open(flags.actions, "r")
+        for line in f:
+            actions.append(int(line.replace("tensor([[[", "").replace("]]])", "")))
+        f.close()
+
+    model = Net(num_actions=num_actions, num_tasks=num_tasks, use_lstm=use_lstm, use_popart=use_popart, reward_clipping=reward_clipping)
+    model.eval()
+    checkpoint = torch.load(checkpointpath, map_location="cpu")
+    if 'baseline.mu' not in checkpoint["model_state_dict"]:
+        checkpoint["model_state_dict"]["baseline.mu"] = torch.zeros(1)
+        checkpoint["model_state_dict"]["baseline.sigma"] = torch.ones(1)
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    full_action_space = False
+    if flags.num_actions == 18:
+        full_action_space = True
+    gym_env = create_env_det(flags.env, full_action_space)
+    gym_env.seed(0)
+    env = Environment(gym_env)
+
+    observation = env.initial()
+
+    folder = re.sub(r"/model.*tar", "/movies/play_raw/", checkpointpath.replace("/intermediate", ""))
+    with torch.no_grad():
+        for i in range(10000):
+            #time.sleep(0.05)
+            #env.gym_env.render()
+            filename = folder + flags.xpid + "_" + ( str(flags.intermediate_model_id).zfill(9) if flags.intermediate_model_id is not None else "None" ) + "_" + flags.env + "_" + str(i).zfill(5) + ".png"
+            img = Image.fromarray(env.gym_env.ale.getScreenRGB2(), 'RGB').resize([160, 210])
+            img.save(filename, format='png')
+            agent_outputs = model(observation, torch.tensor)
+            policy_outputs, _ = agent_outputs
+            action = policy_outputs[0]
+            if len(actions) > 0:
+                action = torch.tensor(actions[i])
+            observation = env.step(action)
+            if observation["done"].item():
+                print("episode_return:", observation["episode_return"], "step:", observation["episode_step"])
+                break
+            i = i + 1
+
+    env.close()
 
 
 def env_info(flags):
@@ -864,6 +942,9 @@ def main(flags):
     if flags.mode == "test" or flags.mode == "test_render":
         test(flags)
 
+    if flags.mode == "record":
+        record(flags)
+
     if flags.mode == "env_info":
         env_info(flags)
 
@@ -871,6 +952,16 @@ def main(flags):
         # Send Ctrl-c to servers.
         server_proc.send_signal(signal.SIGINT)
 
+
+def create_env_det(env_name, full_action_space=False, noop=20):
+    return atari_wrappers.wrap_pytorch(
+        atari_wrappers.wrap_deepmind(
+            atari_wrappers.make_atari_det(env_name, full_action_space=full_action_space, noop=noop),
+            clip_rewards=False,
+            frame_stack=True,
+            scale=False,
+        )
+    )
 
 def create_env(env_name, full_action_space=False):
     return atari_wrappers.wrap_pytorch(
