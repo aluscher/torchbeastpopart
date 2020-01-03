@@ -26,7 +26,7 @@ Popart:
 
 ## Trained models
 
-https://drive.google.com/file/d/1yJpZFGPL-ero2fJUBNYS6pLDS5tatb7h/view?usp=sharing
+https://drive.google.com/file/d/1jqUEAWRCfyO-HodGl_PaQvOB6BvedTq6/view?usp=sharing
 
 | Name | Environments | Steps (millions) | Intermediate models |
 | ---- |------------- | ---------------- | ------------------- |
