@@ -99,21 +99,35 @@ class ResNet(nn.Module):
             for _ in range(2)
         )
 
-    def forward(self, inputs, core_state):
-        x = inputs["frame"]
+    def forward(self, inputs, core_state=(), run_to_conv=-1):
+        if run_to_conv >= 0:
+            x = inputs
+        else:
+            x = inputs["frame"]
 
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
 
-        res_input = None
-        for i, fconv in enumerate(self.feat_convs):
-            x = fconv(x)
+        conv_counter = 0
+        for i, f_conv in enumerate(self.feat_convs):
+            x = f_conv(x)
+            conv_counter += 1
+            if run_to_conv < conv_counter:
+                return x
+
             res_input = x
             x = self.resnet1[i](x)
+            conv_counter += 2
+            if run_to_conv < conv_counter:
+                return x
             x += res_input
+
             res_input = x
             x = self.resnet2[i](x)
+            conv_counter += 2
+            if run_to_conv < conv_counter:
+                return x
             x += res_input
 
         x = F.relu(x)
@@ -165,3 +179,4 @@ class ResNet(nn.Module):
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
             core_state,
         )
+
