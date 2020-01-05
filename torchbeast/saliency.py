@@ -7,6 +7,8 @@ import time
 import warnings
 import re
 
+import pickle
+
 from PIL import Image
 
 import torch
@@ -154,8 +156,17 @@ def score_frame(model, history, ix, r, d, interp_func, mode="policy", task=0):
 
 
 def saliency_on_atari_frame(saliency, channel=0):
-    S = imresize(saliency, (160, 160))
-    S = ( S - S.min() ) / S.max() * 255.
+    q = np.quantile(saliency.flatten(), [1, 0.99, 0.98, 0.97, 0.96, 0.95, 0.94, 0.93, 0.92, 0.91, 0.9])
+    S = np.zeros_like(saliency)
+    delta = 255. / 10.
+    for i in range(1, len(q)):
+        idx = saliency >= q[i]
+        if i > 1:
+            idx = np.logical_and(saliency >= q[i], saliency < q[i - 1])
+        S[idx] = (saliency[idx] - q[i]) / (q[i - 1] - q[i]) * delta + (10 - i) * delta
+
+    S = imresize(S, (160, 160))
+
     image = np.zeros([210, 160, 3], dtype='uint16')
     image[25:185, :, channel] += S.astype('uint16')
     image = image.clip(0, 255).astype('uint8')
