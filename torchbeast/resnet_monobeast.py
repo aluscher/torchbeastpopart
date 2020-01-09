@@ -113,20 +113,20 @@ class ResNet(nn.Module):
         for i, f_conv in enumerate(self.feat_convs):
             x = f_conv(x)
             conv_counter += 1
-            if run_to_conv < conv_counter:
+            if 0 <= run_to_conv < conv_counter:
                 return x
 
             res_input = x
             x = self.resnet1[i](x)
             conv_counter += 2
-            if run_to_conv < conv_counter:
+            if 0 <= run_to_conv < conv_counter:
                 return x
             x += res_input
 
             res_input = x
             x = self.resnet2[i](x)
             conv_counter += 2
-            if run_to_conv < conv_counter:
+            if 0 <= run_to_conv < conv_counter:
                 return x
             x += res_input
 
@@ -169,14 +169,15 @@ class ResNet(nn.Module):
 
         policy_logits = policy_logits.view(T, B, self.num_actions)
 
-        # baseline = baseline.view(T, B, self.num_tasks)
-        # normalized_baseline = normalized_baseline.view(T, B, self.num_tasks)
-        # action = action.view(T, B, 1)
-        baseline = baseline.view(T, B)
-        action = action.view(T, B)
+        baseline = baseline.view(T, B, self.num_tasks)
+        normalized_baseline = normalized_baseline.view(T, B, self.num_tasks)
+        action = action.view(T, B, 1)
+        # baseline = baseline.view(T, B)
+        # action = action.view(T, B)
 
         return (
-            dict(policy_logits=policy_logits, baseline=baseline, action=action),
+            dict(policy_logits=policy_logits, baseline=baseline, action=action,
+                 normalized_baseline=normalized_baseline),
             core_state,
         )
 

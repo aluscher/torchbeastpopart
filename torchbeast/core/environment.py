@@ -46,7 +46,7 @@ class Environment:
         )
 
     def step(self, action):
-        frame, reward, done, unused_info = self.gym_env.step(action.item())
+        frame, reward, done, task, unused_info = self.gym_env.step(action.item())
         self.episode_step += 1
         self.episode_return += reward
         episode_step = self.episode_step
@@ -59,11 +59,13 @@ class Environment:
         frame = _format_frame(frame)
         reward = torch.tensor(reward).view(1, 1)
         done = torch.tensor(done).view(1, 1)
+        task = torch.tensor(task).view(1, 1)
 
         return dict(
             frame=frame,
             reward=reward,
             done=done,
+            task=task,  # TODO: not sure if this is even required... don't really need to update the task every time
             episode_return=episode_return,
             episode_step=episode_step,
             last_action=action,
