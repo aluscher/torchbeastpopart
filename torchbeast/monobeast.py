@@ -596,6 +596,10 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         "pg_loss",
         "baseline_loss",
         "entropy_loss",
+        "mu",
+        "sigma",
+    ] + [
+        "{}_step".format(e) for e in environments
     ]
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
@@ -621,7 +625,9 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             timings.time("learn")
             with lock:
                 to_log = dict(step=step)
-                to_log.update({k: stats[k] for k in stat_keys})
+                to_log.update({k: stats[k] for k in stat_keys if "_step" not in k})
+                for e in stats["env_step"]:
+                    to_log["{}_step".format(e)] = stats["env_step"][e]
                 plogger.log(to_log)
                 step += T * B  # so this counts the number of frames, not e.g. trajectories/rollouts
 
