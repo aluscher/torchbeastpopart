@@ -7,6 +7,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from torchbeast.core.popart import PopArtLayer
+
 
 class ConvLSTMCell(nn.Module):
 
@@ -200,6 +202,8 @@ class AttentionAugmentedAgent(nn.Module):
             c_s: int = 64,
             num_queries: int = 4,
             rgb_last: bool = False,
+            num_tasks: int = 1,
+            use_popart: bool = False,
             **kwargs
     ):
         super(AttentionAugmentedAgent, self).__init__()
@@ -207,6 +211,8 @@ class AttentionAugmentedAgent(nn.Module):
         self.observation_shape = observation_shape
         self.num_actions = num_actions
         self.rgb_last = rgb_last
+        self.num_tasks = num_tasks
+        self.use_popart = use_popart
         self.c_v, self.c_k, self.c_s, self.num_queries = c_v, c_k, c_s, num_queries
         if self.rgb_last:
             self.observation_shape = (3,) + tuple(self.observation_shape[1:])
@@ -238,7 +244,7 @@ class AttentionAugmentedAgent(nn.Module):
         self.policy_core = nn.LSTM(hidden_size, hidden_size)
 
         self.policy_head = nn.Linear(hidden_size, num_actions)
-        self.baseline_head = nn.Linear(hidden_size, 1)
+        self.baseline_head = PopArtLayer(hidden_size, num_tasks if self.use_popart else 1)
 
     def initial_state(self, batch_size):
         with torch.no_grad():
@@ -375,8 +381,8 @@ class AttentionAugmentedAgent(nn.Module):
         # --------------
         # (time_steps * batch_size, num_actions)
         policy_logits = self.policy_head(output)
-        # (time_steps * batch_size, 1)
-        baseline = self.baseline_head(output)
+        # (time_steps * batch_size, num_tasks)
+        baseline, normalized_baseline = self.baseline_head(output)
 
         # (time_steps * batch_size, 1)
         if self.training:
@@ -386,19 +392,22 @@ class AttentionAugmentedAgent(nn.Module):
 
         # (time_steps, batch_size, num_actions)
         policy_logits = policy_logits.view(time_steps, batch_size, self.num_actions)
-        # (time_steps, batch_size)
-        baseline = baseline.view(time_steps, batch_size)
-        # (time_steps, batch_size)
-        action = action.view(time_steps, batch_size)
+        # (time_steps, batch_size, num_tasks)
+        baseline = baseline.view(time_steps, batch_size, self.num_tasks)
+        normalized_baseline = normalized_baseline.view(time_steps, batch_size, self.num_tasks)
+        # (time_steps, batch_size, 1)
+        action = action.view(time_steps, batch_size, 1)
 
         if return_attention_maps:
             return (
-                dict(policy_logits=policy_logits, baseline=baseline, action=action),
+                dict(policy_logits=policy_logits, baseline=baseline, action=action,
+                     normalized_baseline=normalized_baseline),
                 vision_core_state + policy_core_state,
                 attention_maps
             )
 
         return (
-            dict(policy_logits=policy_logits, baseline=baseline, action=action),
+            dict(policy_logits=policy_logits, baseline=baseline, action=action,
+                 normalized_baseline=normalized_baseline),
             vision_core_state + policy_core_state
         )

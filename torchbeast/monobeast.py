@@ -15,6 +15,7 @@
 import argparse
 import logging
 import os
+import re
 import pprint
 import threading
 import time
@@ -28,7 +29,6 @@ import torch
 from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
-
 
 from torchbeast import atari_wrappers
 from torchbeast.core import environment
@@ -119,6 +119,12 @@ parser.add_argument("--save_model_every_nsteps", default=0, type=int,
                     help="Save model every n steps")
 parser.add_argument("--beta", default=0.0001, type=float,
                     help="PopArt parameter")
+
+# Test settings.
+parser.add_argument("--num_episodes", default=100, type=int,
+                    help="Number of episodes for Testing.")
+parser.add_argument("--actions",
+                    help="Use given action sequence.")
 
 # yapf: enable
 
@@ -526,6 +532,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
+    # create and start actor threads (the same number for each environment)
     for i, environment in enumerate(environments):
         for j in range(flags.num_actors):
             actor = ctx.Process(
@@ -625,20 +632,20 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     for m in range(flags.num_buffers):
         free_queue.put(m)
 
-    # start as many learner threads as specified => could in principle do PBT (somehow?)
+    # start as many learner threads as specified => could in principle do PBT
     threads = []
     for i in range(flags.num_learner_threads):
         thread = threading.Thread(target=batch_and_learn, name="batch-and-learn-%d" % i, args=(i,))
         thread.start()
         threads.append(thread)
 
-    def checkpoint():
+    def save_latest_model():
         if flags.disable_checkpoint:
             return
         logging.info("Saving checkpoint to %s", checkpointpath)
         torch.save(
             {
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": learner_model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
                 "flags": vars(flags),
@@ -646,13 +653,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             checkpointpath,
         )
 
-    def save_model():
+    def save_intermediate_model():
         save_model_path = checkpointpath.replace(
             "model.tar", "intermediate/model." + str(stats.get("step", 0)).zfill(9) + ".tar")
         logging.info("Saving model to %s", save_model_path)
         torch.save(
             {
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": learner_model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
                 "stats": stats,
@@ -671,13 +678,14 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             time.sleep(5)
             end_step = stats.get("step", 0)
 
-            if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min.
-                checkpoint()
+            if timer() - last_checkpoint_time > 10 * 60:
+                # save every 10 min.
+                save_latest_model()
                 last_checkpoint_time = timer()
 
             if flags.save_model_every_nsteps > 0 and end_step >= last_savemodel_nsteps + flags.save_model_every_nsteps:
                 # save model every save_model_every_nsteps steps
-                save_model()
+                save_intermediate_model()
                 last_savemodel_nsteps = end_step
 
             sps = (end_step - start_step) / (timer() - start_time)
@@ -708,45 +716,83 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             actor.join(timeout=1)
         gradient_tracker.print_total()
 
-    checkpoint()
+    save_latest_model()
     plogger.close()
 
 
 def test(flags, num_episodes: int = 10):
     # TODO: update this as well (?)
     if flags.xpid is None:
-        checkpointpath = "./latest/model.tar"
+        checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar")))
+    elif ".tar" in flags.xpid:
+        checkpointpath = os.path.expandvars(os.path.expanduser(flags.xpid))
     else:
         checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar")))
-
-    # set the right agent class
-    if flags.agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
-        Net = AttentionAugmentedAgent
-        logging.info("Using the Attention-Augmented Agent architecture.")
-    elif flags.agent_type.lower() in ["rn", "res", "resnet", "res_net"]:
-        Net = ResNet
-        logging.info("Using the ResNet architecture (monobeast version).")
-    else:
-        Net = AtariNet
-        logging.warning("No valid agent type specified. Using the default agent.")
 
     if len(flags.env.split(",")) != 1:
         raise Exception("Only one environment allowed for testing")
 
-    gym_env = create_env(flags.env, frame_height=flags.frame_height, frame_width=flags.frame_width,
-                         gray_scale=(flags.aaa_input_format == "gray_stack"))
+    # load the original arguments for the loaded network
+    flags_orig = file_writer.read_metadata(
+        re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+    args_orig = flags_orig["args"]
+    agent_type = args_orig.get("agent_type", "resnet")
+    num_actions = args_orig.get("num_actions", 6)
+    num_tasks = args_orig.get("num_tasks", 1)
+    use_lstm = args_orig.get("use_lstm", False)
+    use_popart = args_orig.get("use_popart", False)
+    reward_clipping = args_orig.get("reward_clipping", "abs_one")
+    frame_width = args_orig.get("frame_width", 84)
+    frame_height = args_orig.get("frame_height", 84)
+    aaa_input_format = args_orig.get("aaa_input_format", "gray_stack")
+
+    # set the right agent class
+    if agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
+        Net = AttentionAugmentedAgent
+        logging.info("Using the Attention-Augmented Agent architecture.")
+        agent_type = "aaa"
+    elif agent_type.lower() in ["rn", "res", "resnet", "res_net"]:
+        Net = ResNet
+        logging.info("Using the ResNet architecture (monobeast version).")
+        agent_type = "resnet"
+    else:
+        Net = AtariNet
+        logging.warning("No valid agent type specified. Using the default agent.")
+        agent_type = "default"
+
+    # check if the full action space should be used
+    full_action_space = False
+    if flags.num_actions == 18:
+        full_action_space = True
+
+    # create the environment
+    gym_env = create_env(flags.env,
+                         frame_height=frame_height,
+                         frame_width=frame_width,
+                         gray_scale=(agent_type != "aaa" or aaa_input_format == "gray_stack"),
+                         full_action_space=full_action_space)
     env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm,
-                rgb_last=(flags.aaa_input_format == "rgb_last"))
+
+    # create the model and load its parameters
+    model = Net(observation_shape=gym_env.observation_space.shape,
+                num_actions=num_actions,
+                num_tasks=num_tasks,
+                use_lstm=use_lstm,
+                use_popart=use_popart,
+                reward_clipping=reward_clipping,
+                rgb_last=(agent_type == "aaa" and aaa_input_format == "rgb_last"))
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
+    if 'baseline.mu' not in checkpoint["model_state_dict"]:
+        checkpoint["model_state_dict"]["baseline.mu"] = torch.zeros(1)
+        checkpoint["model_state_dict"]["baseline.sigma"] = torch.ones(1)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     observation = env.initial()
     returns = []
-
-    while len(returns) < num_episodes:
+    while len(returns) < flags.num_episodes:
         if flags.mode == "test_render":
+            time.sleep(0.05)
             env.gym_env.render()
         agent_outputs = model(observation)
         policy_outputs, _ = agent_outputs

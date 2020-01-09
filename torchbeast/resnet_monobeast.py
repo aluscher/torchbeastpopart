@@ -33,43 +33,31 @@ class ResNet(nn.Module):
 
         input_channels = 4
         for num_ch in [16, 32, 32]:
-            feats_convs = []
-            feats_convs.append(
-                nn.Conv2d(
-                    in_channels=input_channels,
-                    out_channels=num_ch,
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                )
-            )
-            feats_convs.append(nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+            feats_convs = [nn.Conv2d(
+                in_channels=input_channels,
+                out_channels=num_ch,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ), nn.MaxPool2d(kernel_size=3, stride=2, padding=1)]
             self.feat_convs.append(nn.Sequential(*feats_convs))
 
             input_channels = num_ch
 
             for i in range(2):
-                resnet_block = []
-                resnet_block.append(nn.ReLU())
-                resnet_block.append(
-                    nn.Conv2d(
-                        in_channels=input_channels,
-                        out_channels=num_ch,
-                        kernel_size=3,
-                        stride=1,
-                        padding=1,
-                    )
-                )
-                resnet_block.append(nn.ReLU())
-                resnet_block.append(
-                    nn.Conv2d(
-                        in_channels=input_channels,
-                        out_channels=num_ch,
-                        kernel_size=3,
-                        stride=1,
-                        padding=1,
-                    )
-                )
+                resnet_block = [nn.ReLU(), nn.Conv2d(
+                    in_channels=input_channels,
+                    out_channels=num_ch,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                ), nn.ReLU(), nn.Conv2d(
+                    in_channels=input_channels,
+                    out_channels=num_ch,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                )]
                 if i == 0:
                     self.resnet1.append(nn.Sequential(*resnet_block))
                 else:
@@ -134,6 +122,7 @@ class ResNet(nn.Module):
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
+        clipped_reward = None
         if self.reward_clipping == "abs_one":
             clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         elif self.reward_clipping == "none":
@@ -144,8 +133,8 @@ class ResNet(nn.Module):
         if self.use_lstm:
             core_input = core_input.view(T, B, -1)
             core_output_list = []
-            notdone = (~inputs["done"]).float()
-            for input, nd in zip(core_input.unbind(), notdone.unbind()):
+            not_done = (~inputs["done"]).float()
+            for input, nd in zip(core_input.unbind(), not_done.unbind()):
                 # Reset core state to zero whenever an episode ended.
                 # Make `done` broadcastable with (num_layers, B, hidden_size)
                 # states:
@@ -172,8 +161,6 @@ class ResNet(nn.Module):
         baseline = baseline.view(T, B, self.num_tasks)
         normalized_baseline = normalized_baseline.view(T, B, self.num_tasks)
         action = action.view(T, B, 1)
-        # baseline = baseline.view(T, B)
-        # action = action.view(T, B)
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action,

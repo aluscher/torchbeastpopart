@@ -2,13 +2,18 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from torchbeast.core.popart import PopArtLayer
+
 
 class AtariNet(nn.Module):
 
-    def __init__(self, observation_shape, num_actions, use_lstm=False, **kwargs):
+    def __init__(self, observation_shape, num_actions, num_tasks=1, use_lstm=False, use_popart=False, **kwargs):
         super(AtariNet, self).__init__()
         self.observation_shape = observation_shape
         self.num_actions = num_actions
+        self.num_tasks = num_tasks
+        self.use_lstm = use_lstm
+        self.use_popart = use_popart
 
         # Feature extraction.
         self.conv1 = nn.Conv2d(
@@ -26,12 +31,11 @@ class AtariNet(nn.Module):
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
 
-        self.use_lstm = use_lstm
         if use_lstm:
             self.core = nn.LSTM(core_output_size, core_output_size, 2)
 
         self.policy = nn.Linear(core_output_size, self.num_actions)
-        self.baseline = nn.Linear(core_output_size, 1)
+        self.baseline = PopArtLayer(core_output_size, num_tasks if self.use_popart else 1)
 
     def initial_state(self, batch_size):
         if not self.use_lstm:
@@ -79,7 +83,7 @@ class AtariNet(nn.Module):
 
         # core_output should have shape (T * B, hidden_size) now?
         policy_logits = self.policy(core_output)
-        baseline = self.baseline(core_output)
+        baseline, normalized_baseline = self.baseline(core_output)
 
         if self.training:
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
@@ -88,10 +92,13 @@ class AtariNet(nn.Module):
             action = torch.argmax(policy_logits, dim=1)
 
         policy_logits = policy_logits.view(T, B, self.num_actions)
-        baseline = baseline.view(T, B)
-        action = action.view(T, B)
+
+        baseline = baseline.view(T, B, self.num_tasks)
+        normalized_baseline = normalized_baseline.view(T, B, self.num_tasks)
+        action = action.view(T, B, 1)
 
         return (
-            dict(policy_logits=policy_logits, baseline=baseline, action=action),
+            dict(policy_logits=policy_logits, baseline=baseline, action=action,
+                 normalized_baseline=normalized_baseline),
             core_state,
         )
