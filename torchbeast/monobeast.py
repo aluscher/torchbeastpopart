@@ -440,20 +440,22 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
 
 
 def train(flags):  # pylint: disable=too-many-branches, too-many-statements
+    # prepare for logging and saving models
     if flags.xpid is None:
         flags.xpid = "torchbeast-%s" % time.strftime("%Y%m%d-%H%M%S")
-    plogger = file_writer.FileWriter(
-        xpid=flags.xpid, xp_args=flags.__dict__, rootdir=flags.savedir
-    )
-    checkpointpath = os.path.expandvars(
-        os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
-    )
+    plogger = file_writer.FileWriter(xpid=flags.xpid, xp_args=flags.__dict__, rootdir=flags.savedir)
+    checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar")))
     if flags.save_model_every_nsteps > 0:
         os.makedirs(checkpointpath.replace("model.tar", "intermediate"), exist_ok=True)
 
-    if flags.num_buffers is None:  # Set sensible default for num_buffers.
-        flags.num_buffers = max(2 * flags.num_actors, flags.batch_size)
-    if flags.num_actors >= flags.num_buffers:
+    # get a list and determine the number of environments
+    environments = flags.env.split(",")
+    flags.num_tasks = len(environments)
+
+    # set the number of buffers
+    if flags.num_buffers is None:
+        flags.num_buffers = max(2 * flags.num_actors * flags.num_tasks, flags.batch_size)
+    if flags.num_actors * flags.num_tasks >= flags.num_buffers:
         raise ValueError("num_buffers should be larger than num_actors")
     if flags.num_buffers < flags.batch_size:
         raise ValueError("num_buffers should be larger than batch_size")
@@ -461,6 +463,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     T = flags.unroll_length
     B = flags.batch_size
 
+    # set the device to do the training on
     flags.device = None
     if not flags.disable_cuda and torch.cuda.is_available():
         logging.info("Using CUDA.")
@@ -486,9 +489,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     else:
         Net = AtariNet
         logging.warning("No valid agent type specified. Using the default agent.")
-
-    environments = flags.env.split(",")
-    flags.num_tasks = len(environments) if flags.use_popart else 1
 
     # create a dummy environment, mostly to get the observation and action spaces from
     gym_env = create_env(environments[0], frame_height=flags.frame_height, frame_width=flags.frame_width,
@@ -719,15 +719,14 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         for _ in range(flags.num_actors):
             free_queue.put(None)  # send quit signal to actors
         for actor in actor_processes:
-            actor.join(timeout=1)
+            actor.join(timeout=10)
         gradient_tracker.print_total()
 
     save_latest_model()
     plogger.close()
 
 
-def test(flags, num_episodes: int = 10):
-    # TODO: update this as well (?)
+def test(flags):
     if flags.xpid is None:
         checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar")))
     elif ".tar" in flags.xpid:
@@ -811,7 +810,7 @@ def test(flags, num_episodes: int = 10):
                 observation["episode_return"].item(),
             )
     env.close()
-    logging.info("Average returns over %i steps: %.1f", num_episodes, sum(returns) / len(returns))
+    logging.info("Average returns over %i steps: %.1f", flags.num_episodes, sum(returns) / len(returns))
 
 
 def create_env(env, frame_height=84, frame_width=84, gray_scale=True, full_action_space=False, task=0):
