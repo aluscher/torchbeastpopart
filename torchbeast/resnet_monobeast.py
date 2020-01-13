@@ -167,4 +167,3 @@ class ResNet(nn.Module):
                  normalized_baseline=normalized_baseline),
             core_state,
         )
-
