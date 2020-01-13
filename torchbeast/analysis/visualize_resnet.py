@@ -169,8 +169,18 @@ def filter_vis(model, flags):
     layer_vis.visualise_layer_with_hooks()
 
 
-def filter_comp(model, flags):
-    pass
+def filter_comp(models, flags):
+    filters = [[] for _ in models]
+    for m_idx, m in enumerate(models):
+        for i in range(0, len(m.feat_convs)):
+            filters[m_idx].append(m.feat_convs[i][0].cpu().numpy())
+            filters[m_idx].append(m.resnet1[i][1].cpu().numpy())
+            filters[m_idx].append(m.resnet1[i][3].cpu().numpy())
+            filters[m_idx].append(m.resnet2[i][1].cpu().numpy())
+            filters[m_idx].append(m.resnet2[i][3].cpu().numpy())
+
+    for f in filters[0]:
+        print(f.shape)
 
 
 def load_model(flags):
@@ -189,7 +199,6 @@ def load_model(flags):
         checkpoint = torch.load(p, map_location="cpu")
 
         # determine input for building the model
-        # try:
         if "baseline.mu" not in checkpoint["model_state_dict"]:
             checkpoint["model_state_dict"]["baseline.mu"] = torch.zeros(1)
             checkpoint["model_state_dict"]["baseline.sigma"] = torch.ones(1)
@@ -198,6 +207,7 @@ def load_model(flags):
             num_tasks = checkpoint["model_state_dict"]["baseline.mu"].shape[0]
         num_actions = checkpoint["model_state_dict"]["policy.weight"].shape[0]
 
+        # construct model and transfer loaded parameters
         model = ResNetMono(observation_shape=None,
                            num_actions=num_actions,
                            num_tasks=num_tasks,
@@ -206,16 +216,6 @@ def load_model(flags):
                            reward_clipping="abs_one")
         model.eval()
         model.load_state_dict(checkpoint["model_state_dict"])
-        """
-        except:
-            model = ResNetMono(num_actions=flags.num_actions,
-                               num_tasks=flags.num_tasks,
-                               use_lstm=True,
-                               use_popart=flags.use_popart,
-                               reward_clipping="abs_one")
-            model.eval()
-            model.load_state_dict(checkpoint["model_state_dict"])
-        """
         models.append(model)
 
     return models if len(models) > 1 else models[0]
@@ -233,9 +233,12 @@ if __name__ == '__main__':
                         choices=["filter_vis", "filter_comp"],
                         help="What visualizations to create.")
     parser.add_argument("--layer_index", type=int, default=0,
-                        help="Layer for which to visualize a filter (only in mode 'filter_vis').")
+                        help="Layer for which to visualize a filter.")
     parser.add_argument("--filter_index", type=int, default=0,
                         help="Filter to visualize (only in mode 'filter_vis').")
+    parser.add_argument("--pairwise_comp", action="store_true",
+                        help="Visualise difference between all pairwise filters, "
+                             "not just corresponding ones (only in mode 'filter_comp').")
 
     # correct model params
     parser.add_argument("--frame_height", type=int, default=84,

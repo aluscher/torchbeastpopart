@@ -23,7 +23,6 @@ import time
 from typing import Dict
 
 
-
 def gather_metadata() -> Dict:
     date_start = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
     # Gathering git metadata.

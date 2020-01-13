@@ -15,6 +15,7 @@
 import argparse
 import logging
 import os
+import re
 import pprint
 import threading
 import time
@@ -24,18 +25,10 @@ import typing
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
-from matplotlib.lines import Line2D
-
-import tempfile
-import itertools as IT
-import os
-import tabulate
 
 from torchbeast import atari_wrappers
 from torchbeast.core import environment
@@ -45,6 +38,9 @@ from torchbeast.core import vtrace
 
 from torchbeast.attention_augmented_agent import AttentionAugmentedAgent
 from torchbeast.resnet_monobeast import ResNet
+from torchbeast.atari_net_monobeast import AtariNet
+
+from torchbeast.analysis.gradient_tracking import plot_grad_flow, GradientTracker
 
 
 # yapf: disable
@@ -77,9 +73,11 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
+parser.add_argument("--num_actions", default=6, type=int, metavar="A",
+                    help="Number of actions.")
 parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
-parser.add_argument("--agent_type", type=str, default="aaa",
+parser.add_argument("--agent_type", type=str, default="resnet",
                     help="The type of network to use for the agent.")
 parser.add_argument("--frame_height", type=int, default=84,
                     help="Height to which frames are rescaled.")
@@ -87,6 +85,8 @@ parser.add_argument("--frame_width", type=int, default=84,
                     help="Width to which frames are rescaled.")
 parser.add_argument("--aaa_input_format", type=str, default="gray_stack", choices=["gray_stack", "rgb_last", "rgb_stack"],
                     help="Color format of the frames as input for the AAA.")
+parser.add_argument("--use_popart", action="store_true",
+                    help="Use PopArt Layer.")
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.0006,
@@ -117,116 +117,22 @@ parser.add_argument("--write_profiler_trace", action="store_true",
                     "for chrome://tracing/.")
 parser.add_argument("--save_model_every_nsteps", default=0, type=int,
                     help="Save model every n steps")
+parser.add_argument("--beta", default=0.0001, type=float,
+                    help="PopArt parameter")
+
+# Test settings.
+parser.add_argument("--num_episodes", default=100, type=int,
+                    help="Number of episodes for Testing.")
+parser.add_argument("--actions",
+                    help="Use given action sequence.")
 
 # yapf: enable
 
 
-logging.basicConfig(
-    format=(
-        "[%(levelname)s:%(process)d %(module)s:%(lineno)d %(asctime)s] " "%(message)s"
-    ),
-    level=0,
-)
+logging.basicConfig(format="[%(levelname)s:%(process)d %(module)s:%(lineno)d %(asctime)s] " "%(message)s", level=0)
 logging.getLogger("matplotlib.font_manager").disabled = True
 
 Buffers = typing.Dict[str, typing.List[torch.Tensor]]
-
-
-def uniquify(path, sep = ''):
-    def name_sequence():
-        count = IT.count()
-        yield ''
-        while True:
-            yield '{s}{n:d}'.format(s = sep, n = next(count))
-    orig = tempfile._name_sequence
-    with tempfile._once_lock:
-        tempfile._name_sequence = name_sequence()
-        path = os.path.normpath(path)
-        dirname, basename = os.path.split(path)
-        filename, ext = os.path.splitext(basename)
-        fd, filename = tempfile.mkstemp(dir = dirname, prefix = filename, suffix = ext)
-        tempfile._name_sequence = orig
-    return filename
-
-
-def plot_grad_flow(named_parameters, flags):
-    '''Plots the gradients flowing through different layers in the net during training.
-    Can be used for checking for possible gradient vanishing / exploding problems.
-
-    Usage: Plug this function in Trainer class after loss.backwards() as
-    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
-    ave_grads = []
-    max_grads = []
-    layers = []
-    for n, p in named_parameters:
-        if (p.requires_grad) and ("bias" not in n):
-            layers.append(n)
-            ave_grads.append(p.grad.abs().mean())
-            max_grads.append(p.grad.abs().max())
-    fig = plt.figure(figsize=(5, 10))
-    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.3, lw=1, color="c")
-    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.9, lw=1, color="b")
-    plt.hlines(0, 0, len(ave_grads) + 1, lw=2, color="k")
-    plt.xticks(range(0, len(ave_grads), 1), layers, rotation="vertical")
-    plt.xlim(left=0, right=len(ave_grads))
-    plt.ylim(bottom=-0.001, top=0.02)  # zoom in on the lower gradient regions
-    plt.xlabel("Layers")
-    plt.ylabel("average gradient")
-    plt.title("Gradient flow")
-    plt.grid(True)
-    plt.legend([Line2D([0], [0], color="c", lw=4),
-                Line2D([0], [0], color="b", lw=4),
-                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
-    plt.tight_layout()
-
-    path = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "gradients.png")))
-    plt.savefig(uniquify(path))
-
-
-class GradientTracker:
-
-    def __init__(self):
-        self.avg_grad = {}
-        self.max_grad = {}
-
-        self.learning_step_count = 0
-
-    def process_backward_pass(self, named_parameters):
-        current_grad = []
-        for n, p in named_parameters:
-            if p.requires_grad and "bias" not in n:
-                current_grad.append([n])
-
-                if n not in self.avg_grad:
-                    self.avg_grad[n] = []
-                if n not in self.max_grad:
-                    self.max_grad[n] = []
-
-                if p.grad is None:
-                    print("Layer '{}' has gradient None!".format(n))
-
-                self.avg_grad[n].append(p.grad.abs().mean())
-                self.max_grad[n].append(p.grad.abs().max())
-
-                current_grad[-1].append(self.avg_grad[n][-1])
-                current_grad[-1].append(p.grad.abs().std())
-                current_grad[-1].append(self.max_grad[n][-1])
-
-        print("\nCurrent gradients at learning step {:d}:".format(self.learning_step_count))
-        print(tabulate.tabulate(current_grad, headers=["layer", "mean", "std", "max"], tablefmt="presto"), "\n")
-
-        self.learning_step_count += 1
-
-    def print_total(self):
-        grad = []
-        for n in self.avg_grad:
-            grad.append([n])
-            grad[-1].append(np.mean(self.avg_grad[n]))
-            grad[-1].append(np.max(self.max_grad[n]))
-
-        print("\nTotal gradients at learning step {:d}:".format(self.learning_step_count))
-        print(tabulate.tabulate(grad, headers=["layer", "mean", "max"], tablefmt="presto"), "\n")
-
 
 gradient_tracker = GradientTracker()
 
@@ -245,16 +151,19 @@ def compute_entropy_loss(logits):
 def compute_policy_gradient_loss(logits, actions, advantages):
     cross_entropy = F.nll_loss(
         F.log_softmax(torch.flatten(logits, 0, 1), dim=-1),
-        target=torch.flatten(actions, 0, 1),
+        # target=torch.flatten(actions, 0, 1),
+        target=torch.flatten(actions, 0, 2),
         reduction="none",
     )
-    cross_entropy = cross_entropy.view_as(advantages)
+    # cross_entropy = cross_entropy.view_as(advantages)
+    cross_entropy = cross_entropy.view_as(actions)
     return torch.sum(cross_entropy * advantages.detach())
 
 
 def act(
     flags,
     env: str,
+    task: int,
     full_action_space: bool,
     actor_index: int,
     free_queue: mp.SimpleQueue,
@@ -270,10 +179,8 @@ def act(
         # create the environment from command line parameters
         # => could also create a special one which operates on a list of games (which we need)
         gym_env = create_env(env, frame_height=flags.frame_height, frame_width=flags.frame_width,
-                             gray_scale=(flags.aaa_input_format == "gray_stack"), full_action_space=full_action_space)
-        # NOTE: this part of the act() function is only called once when the actor thread/process
-        # is started, so it would probably not be a good idea to just distribute the different
-        # games over different environments, but that each environment contains all games
+                             gray_scale=(flags.aaa_input_format == "gray_stack"),
+                             full_action_space=full_action_space, task=task)
 
         # generate a seed for the environment (NO HUMAN STARTS HERE!), could just
         # use this for all games wrapped by the environment for our application
@@ -310,7 +217,7 @@ def act(
             for i, tensor in enumerate(agent_state):
                 initial_agent_state_buffers[index][i][...] = tensor
 
-            # Do new rollout (ONLY UP TO A FIXED LENGTH, IS THIS WHAT WE WANT?)
+            # Do new rollout
             for t in range(flags.unroll_length):
                 timings.reset()
 
@@ -321,7 +228,6 @@ def act(
                 timings.time("model")
 
                 # agent acting in the environment
-                # TODO: does that mean the same action isn't executed for 4 time steps?
                 env_output = env.step(agent_output["action"])
 
                 timings.time("step")
@@ -399,9 +305,9 @@ def learn(
     scheduler,
     stats,
     lock=threading.Lock(),
+    envs=None
 ):
     """Performs a learning (optimization) step."""
-    print("PERFORMING ONE LEARNING STEP!")
     with lock:
         # forward pass with gradients
         learner_outputs, unused_state = model(batch, initial_agent_state)
@@ -422,12 +328,19 @@ def learn(
 
         # the "~"/tilde operator is apparently kind of a complement or # inverse, so maybe this just reverses
         # the "done" tensor? in that case would discounting only be applied when the game was NOT done?
-        # TODO: print this out to see what it actually does
         discounts = (~batch["done"]).float() * flags.discounting
+
+        # prepare tensors for computation of the loss
+        task = F.one_hot(batch["task"].long(), flags.num_tasks).float()
+        clipped_rewards = clipped_rewards[:, :, None]
+        discounts = discounts[:, :, None]
+
+        # prepare PopArt parameters as well
+        mu = model.baseline.mu[None, None, :]
+        sigma = model.baseline.sigma[None, None, :]
 
         # get the V-trace returns; I hope nothing needs to be changed about this, but I think
         # once one has the V-trace returns it can just be plugged into the PopArt equations
-        # TODO: would still be good to properly understand what is happening inside this method
         vtrace_returns = vtrace.from_logits(
             behavior_policy_logits=batch["policy_logits"],
             target_policy_logits=learner_outputs["policy_logits"],
@@ -436,18 +349,26 @@ def learn(
             rewards=clipped_rewards,
             values=learner_outputs["baseline"],
             bootstrap_value=bootstrap_value,
+            normalized_values=learner_outputs["normalized_baseline"],
+            mu=mu,
+            sigma=sigma
         )
+
+        # PopArt normalization
+        with torch.no_grad():
+            normalized_vs = (vtrace_returns.vs - mu) / sigma
 
         # policy gradient loss
         pg_loss = compute_policy_gradient_loss(
             learner_outputs["policy_logits"],
             batch["action"],
-            vtrace_returns.pg_advantages,
+            vtrace_returns.pg_advantages * task,
         )
 
         # value function/baseline loss (1/2 * squared difference between V-trace and value function)
         baseline_loss = flags.baseline_cost * compute_baseline_loss(
-            vtrace_returns.vs - learner_outputs["baseline"]
+            # vtrace_returns.vs - learner_outputs["baseline"]
+            (normalized_vs - learner_outputs["normalized_baseline"]) * task
         )
 
         # entropy loss for getting a "diverse" action distribution (?), "normal entropy" over action distribution
@@ -460,32 +381,39 @@ def learn(
         # do the backward pass (WITH GRADIENT NORM CLIPPING) and adjust hyperparameters (scheduler, ?)
         optimizer.zero_grad()
         total_loss.backward()
-        plot_grad_flow(model.named_parameters(), flags)
+        # plot_grad_flow(model.named_parameters(), flags)
         gradient_tracker.process_backward_pass(model.named_parameters())
         nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
         scheduler.step()
+
+        # update the PopArt parameters, which the optimizer does not take care of
+        if flags.use_popart:
+            model.baseline.update_parameters(vtrace_returns.vs, task)
 
         # update the actor model with the new parameters
         actor_model.load_state_dict(model.state_dict())
 
         # get the returns only for finished episodes (where the game was played to completion)
         episode_returns = batch["episode_return"][batch["done"]]
+        stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
         stats["mean_episode_return"] = torch.mean(episode_returns).item()
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
         stats["entropy_loss"] = entropy_loss.item()
-        stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
+        stats["mu"] = mu[0, 0, :]
+        stats["sigma"] = sigma[0, 0, :]
+        if "env_step" not in stats:
+            stats["env_step"] = {}
+        for task in batch["task"][0].cpu().numpy():
+            stats["env_step"][envs[task]] = stats["env_step"].get(envs[task], 0) + flags.unroll_length
 
         return stats
 
 
 def create_buffers(flags, obs_shape, num_actions) -> Buffers:
-    # TODO: should probably print this out to get what exactly is happening here; in particular I don't really
-    #  understand if the specs dictionary is even really used for anything else but to create the buffers;
-    #  I'm also not sure what exactly the number of buffers influences here, so should figure that out
     T = flags.unroll_length
     specs = dict(  # seems like these "inner" dicts could also be something else...
         frame=dict(size=(T + 1, *obs_shape), dtype=torch.uint8),
@@ -494,9 +422,11 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
         episode_return=dict(size=(T + 1,), dtype=torch.float32),
         episode_step=dict(size=(T + 1,), dtype=torch.int32),
         policy_logits=dict(size=(T + 1, num_actions), dtype=torch.float32),
-        baseline=dict(size=(T + 1,), dtype=torch.float32),
+        baseline=dict(size=(T + 1, flags.num_tasks), dtype=torch.float32),
         last_action=dict(size=(T + 1,), dtype=torch.int64),
-        action=dict(size=(T + 1,), dtype=torch.int64),
+        action=dict(size=(T + 1, 1), dtype=torch.int64),
+        normalized_baseline=dict(size=(T + 1, flags.num_tasks), dtype=torch.float32),
+        task=dict(size=(T + 1,), dtype=torch.int64)
     )
     buffers: Buffers = {key: [] for key in specs}
 
@@ -539,6 +469,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         logging.info("Not using CUDA.")
         flags.device = torch.device("cpu")
 
+    # set the environments
+    if flags.env == "six":
+        flags.env = "AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4," \
+                    "NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4"
+    elif flags.env == "three":
+        flags.env = "AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4"
+
     # set the right agent class
     if flags.agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
         Net = AttentionAugmentedAgent
@@ -551,6 +488,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         logging.warning("No valid agent type specified. Using the default agent.")
 
     environments = flags.env.split(",")
+    flags.num_tasks = len(environments) if flags.use_popart else 1
 
     # create a dummy environment, mostly to get the observation and action spaces from
     gym_env = create_env(environments[0], frame_height=flags.frame_height, frame_width=flags.frame_width,
@@ -567,7 +505,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             break
 
     # create the model and the buffers to pass around data between actors and learner
-    model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm, rgb_last=(flags.aaa_input_format == "rgb_last"))
+    model = Net(observation_space_shape,
+                action_space_n,
+                use_lstm=flags.use_lstm,
+                num_tasks=flags.num_tasks,
+                use_popart=flags.use_popart,
+                reward_clipping=flags.reward_clipping,
+                rgb_last=(flags.aaa_input_format == "rgb_last"))
     buffers = create_buffers(flags, observation_space_shape, model.num_actions)
 
     # I'm guessing that this is required (similarly to the buffers) so that the
@@ -588,6 +532,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
+    # create and start actor threads (the same number for each environment)
     for i, environment in enumerate(environments):
         for j in range(flags.num_actors):
             actor = ctx.Process(
@@ -595,6 +540,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 args=(
                     flags,
                     environment,
+                    i,
                     full_action_space,
                     i*flags.num_actors + j,
                     free_queue,
@@ -607,7 +553,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             actor.start()
             actor_processes.append(actor)
 
-    learner_model = Net(observation_space_shape, action_space_n, use_lstm=flags.use_lstm,
+    learner_model = Net(observation_space_shape,
+                        action_space_n,
+                        use_lstm=flags.use_lstm,
+                        num_tasks=flags.num_tasks,
+                        use_popart=flags.use_popart,
+                        reward_clipping=flags.reward_clipping,
                         rgb_last=(flags.aaa_input_format == "rgb_last")).to(device=flags.device)
 
     # the hyperparameters in the paper are found/adjusted using population-based training,
@@ -626,6 +577,18 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    # Load state from a checkpoint, if possible.
+    if os.path.exists(checkpointpath):
+        checkpoint_states = torch.load(checkpointpath, map_location=flags.device)
+        learner_model.load_state_dict(checkpoint_states["model_state_dict"])
+        optimizer.load_state_dict(checkpoint_states["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
+        # stats = checkpoint_states["stats"] TODO: make this work as well
+        # logging.info(f"Resuming preempted job, current stats:\n{stats}")
+
+    # Initialize actor model like learner model.
+    model.load_state_dict(learner_model.state_dict())
+
     logger = logging.getLogger("logfile")
     stat_keys = [
         "total_loss",
@@ -633,6 +596,10 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         "pg_loss",
         "baseline_loss",
         "entropy_loss",
+        "mu",
+        "sigma",
+    ] + [
+        "{}_step".format(e) for e in environments
     ]
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
@@ -654,11 +621,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 initial_agent_state_buffers,
                 timings,
             )
-            s = learn(flags, model, learner_model, batch, agent_state, optimizer, scheduler, stats)
+            learn(flags, model, learner_model, batch, agent_state, optimizer, scheduler, stats, envs=environments)
             timings.time("learn")
             with lock:
                 to_log = dict(step=step)
-                to_log.update({k: stats[k] for k in stat_keys})
+                to_log.update({k: stats[k] for k in stat_keys if "_step" not in k})
+                for e in stats["env_step"]:
+                    to_log["{}_step".format(e)] = stats["env_step"][e]
                 plogger.log(to_log)
                 step += T * B  # so this counts the number of frames, not e.g. trajectories/rollouts
 
@@ -669,20 +638,20 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     for m in range(flags.num_buffers):
         free_queue.put(m)
 
-    # start as many learner threads as specified => could in principle do PBT (somehow?)
+    # start as many learner threads as specified => could in principle do PBT
     threads = []
     for i in range(flags.num_learner_threads):
         thread = threading.Thread(target=batch_and_learn, name="batch-and-learn-%d" % i, args=(i,))
         thread.start()
         threads.append(thread)
 
-    def checkpoint():
+    def save_latest_model():
         if flags.disable_checkpoint:
             return
         logging.info("Saving checkpoint to %s", checkpointpath)
         torch.save(
             {
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": learner_model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
                 "flags": vars(flags),
@@ -690,13 +659,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             checkpointpath,
         )
 
-    def save_model():
+    def save_intermediate_model():
         save_model_path = checkpointpath.replace(
             "model.tar", "intermediate/model." + str(stats.get("step", 0)).zfill(9) + ".tar")
         logging.info("Saving model to %s", save_model_path)
         torch.save(
             {
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": learner_model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
                 "stats": stats,
@@ -715,13 +684,14 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             time.sleep(5)
             end_step = stats.get("step", 0)
 
-            if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min. TODO: probably change this to count steps
-                checkpoint()
+            if timer() - last_checkpoint_time > 10 * 60:
+                # save every 10 min.
+                save_latest_model()
                 last_checkpoint_time = timer()
 
             if flags.save_model_every_nsteps > 0 and end_step >= last_savemodel_nsteps + flags.save_model_every_nsteps:
                 # save model every save_model_every_nsteps steps
-                save_model()
+                save_intermediate_model()
                 last_savemodel_nsteps = end_step
 
             sps = (end_step - start_step) / (timer() - start_time)
@@ -752,44 +722,83 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             actor.join(timeout=1)
         gradient_tracker.print_total()
 
-    checkpoint()
+    save_latest_model()
     plogger.close()
 
 
 def test(flags, num_episodes: int = 10):
+    # TODO: update this as well (?)
     if flags.xpid is None:
-        checkpointpath = "./latest/model.tar"
+        checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar")))
+    elif ".tar" in flags.xpid:
+        checkpointpath = os.path.expandvars(os.path.expanduser(flags.xpid))
     else:
         checkpointpath = os.path.expandvars(os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar")))
-
-    # set the right agent class
-    if flags.agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
-        Net = AttentionAugmentedAgent
-        logging.info("Using the Attention-Augmented Agent architecture.")
-    elif flags.agent_type.lower() in ["rn", "res", "resnet", "res_net"]:
-        Net = ResNet
-        logging.info("Using the ResNet architecture (monobeast version).")
-    else:
-        Net = AtariNet
-        logging.warning("No valid agent type specified. Using the default agent.")
 
     if len(flags.env.split(",")) != 1:
         raise Exception("Only one environment allowed for testing")
 
-    gym_env = create_env(flags.env, frame_height=flags.frame_height, frame_width=flags.frame_width,
-                         gray_scale=(flags.aaa_input_format == "gray_stack"))
+    # load the original arguments for the loaded network
+    flags_orig = file_writer.read_metadata(
+        re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+    args_orig = flags_orig["args"]
+    agent_type = args_orig.get("agent_type", "resnet")
+    num_actions = args_orig.get("num_actions", 6)
+    num_tasks = args_orig.get("num_tasks", 1)
+    use_lstm = args_orig.get("use_lstm", False)
+    use_popart = args_orig.get("use_popart", False)
+    reward_clipping = args_orig.get("reward_clipping", "abs_one")
+    frame_width = args_orig.get("frame_width", 84)
+    frame_height = args_orig.get("frame_height", 84)
+    aaa_input_format = args_orig.get("aaa_input_format", "gray_stack")
+
+    # set the right agent class
+    if agent_type.lower() in ["aaa", "attention_augmented", "attention_augmented_agent"]:
+        Net = AttentionAugmentedAgent
+        logging.info("Using the Attention-Augmented Agent architecture.")
+        agent_type = "aaa"
+    elif agent_type.lower() in ["rn", "res", "resnet", "res_net"]:
+        Net = ResNet
+        logging.info("Using the ResNet architecture (monobeast version).")
+        agent_type = "resnet"
+    else:
+        Net = AtariNet
+        logging.warning("No valid agent type specified. Using the default agent.")
+        agent_type = "default"
+
+    # check if the full action space should be used
+    full_action_space = False
+    if flags.num_actions == 18:
+        full_action_space = True
+
+    # create the environment
+    gym_env = create_env(flags.env,
+                         frame_height=frame_height,
+                         frame_width=frame_width,
+                         gray_scale=(agent_type != "aaa" or aaa_input_format == "gray_stack"),
+                         full_action_space=full_action_space)
     env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, use_lstm=flags.use_lstm,
-                rgb_last=(flags.aaa_input_format == "rgb_last"))
+
+    # create the model and load its parameters
+    model = Net(observation_shape=gym_env.observation_space.shape,
+                num_actions=num_actions,
+                num_tasks=num_tasks,
+                use_lstm=use_lstm,
+                use_popart=use_popart,
+                reward_clipping=reward_clipping,
+                rgb_last=(agent_type == "aaa" and aaa_input_format == "rgb_last"))
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
+    if 'baseline.mu' not in checkpoint["model_state_dict"]:
+        checkpoint["model_state_dict"]["baseline.mu"] = torch.zeros(1)
+        checkpoint["model_state_dict"]["baseline.sigma"] = torch.ones(1)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     observation = env.initial()
     returns = []
-
-    while len(returns) < num_episodes:
+    while len(returns) < flags.num_episodes:
         if flags.mode == "test_render":
+            time.sleep(0.05)
             env.gym_env.render()
         agent_outputs = model(observation)
         policy_outputs, _ = agent_outputs
@@ -805,106 +814,8 @@ def test(flags, num_episodes: int = 10):
     logging.info("Average returns over %i steps: %.1f", num_episodes, sum(returns) / len(returns))
 
 
-class AtariNet(nn.Module):
-
-    def __init__(self, observation_shape, num_actions, use_lstm=False, **kwargs):
-        super(AtariNet, self).__init__()
-        self.observation_shape = observation_shape
-        self.num_actions = num_actions
-
-        # Feature extraction.
-        self.conv1 = nn.Conv2d(
-            in_channels=self.observation_shape[0],
-            out_channels=32,
-            kernel_size=8,
-            stride=4,
-        )
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-
-        # Fully connected layer.
-        self.fc = nn.Linear(3136, 512)
-
-        # FC output size + one-hot of last action + last reward.
-        core_output_size = self.fc.out_features + num_actions + 1
-
-        self.use_lstm = use_lstm
-        if use_lstm:
-            self.core = nn.LSTM(core_output_size, core_output_size, 2)
-
-        self.policy = nn.Linear(core_output_size, self.num_actions)
-        self.baseline = nn.Linear(core_output_size, 1)
-
-    def initial_state(self, batch_size):
-        if not self.use_lstm:
-            return tuple()
-        return tuple(
-            torch.zeros(self.core.num_layers, batch_size, self.core.hidden_size)
-            for _ in range(2)
-        )
-
-    def forward(self, inputs, core_state=()):
-        x = inputs["frame"]  # [T, B, C, H, W].
-        T, B, *_ = x.shape
-        x = torch.flatten(x, 0, 1)  # Merge time and batch.
-        x = x.float() / 255.0
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.view(T * B, -1)
-        x = F.relu(self.fc(x))
-
-        one_hot_last_action = F.one_hot(
-            inputs["last_action"].view(T * B), self.num_actions
-        ).float()
-        clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
-        core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
-
-        if self.use_lstm:
-            core_input = core_input.view(T, B, -1)
-            core_output_list = []
-            # notdone has shape (time_steps, batch_size)
-            notdone = (~inputs["done"]).float()
-            for input, nd in zip(core_input.unbind(), notdone.unbind()):
-                # Reset core state to zero whenever an episode ended.
-                # Make `done` broadcastable with (num_layers, B, hidden_size)
-                # states:
-                nd = nd.view(1, -1, 1)
-                core_state = tuple(nd * s for s in core_state)
-                output, core_state = self.core(input.unsqueeze(0), core_state)
-                core_output_list.append(output)
-            core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
-            # pretty sure flatten() is just used to merge time and batch again
-        else:
-            core_output = core_input
-            core_state = tuple()
-
-        # core_output should have shape (T * B, hidden_size) now?
-        policy_logits = self.policy(core_output)
-        baseline = self.baseline(core_output)
-
-        if self.training:
-            action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
-        else:
-            # Don't sample when testing.
-            action = torch.argmax(policy_logits, dim=1)
-
-        policy_logits = policy_logits.view(T, B, self.num_actions)
-        baseline = baseline.view(T, B)
-        action = action.view(T, B)
-
-        return (
-            dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state,
-        )
-
-
-# Net = AtariNet
-Net = AttentionAugmentedAgent
-
-
-def create_env(env, frame_height=84, frame_width=84, gray_scale=True, full_action_space=False):
-    return atari_wrappers.wrap_pytorch(
+def create_env(env, frame_height=84, frame_width=84, gray_scale=True, full_action_space=False, task=0):
+    return atari_wrappers.wrap_pytorch_task(
         atari_wrappers.wrap_deepmind(
             atari_wrappers.make_atari(env, full_action_space=full_action_space),
             clip_rewards=False,
@@ -913,7 +824,8 @@ def create_env(env, frame_height=84, frame_width=84, gray_scale=True, full_actio
             frame_width=frame_width,
             gray_scale=gray_scale,
             scale=False,
-        )
+        ),
+        task=task
     )
 
 
