@@ -113,20 +113,20 @@ class ResNet(nn.Module):
         for i, f_conv in enumerate(self.feat_convs):
             x = f_conv(x)
             conv_counter += 1
-            if run_to_conv < conv_counter:
+            if 0 <= run_to_conv < conv_counter:
                 return x
 
             res_input = x
             x = self.resnet1[i](x)
             conv_counter += 2
-            if run_to_conv < conv_counter:
+            if 0 <= run_to_conv < conv_counter:
                 return x
             x += res_input
 
             res_input = x
             x = self.resnet2[i](x)
             conv_counter += 2
-            if run_to_conv < conv_counter:
+            if 0 <= run_to_conv < conv_counter:
                 return x
             x += res_input
 
@@ -179,4 +179,3 @@ class ResNet(nn.Module):
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
             core_state,
         )
-
