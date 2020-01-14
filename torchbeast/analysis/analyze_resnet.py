@@ -1,13 +1,3 @@
-# Adapted from https://github.com/utkuozbulak/pytorch-cnn-visualizations
-# TODO:
-#  1. filter comparison between two models
-#  2. optimise maximally activating input
-
-"""
-Created on Sat Nov 18 23:12:08 2017
-
-@author: Utku Ozbulak - github.com/utkuozbulak
-"""
 import os
 import re
 import csv
@@ -172,15 +162,7 @@ def filter_vis(flags):
                         "Only the first model will be visualised.")
         paths = paths[:1]
     model = load_models(paths)
-    """
-    for n, p in model.named_parameters():
-        print(n)
-    print(model)
-    remove_sequential(model)
-    for l in all_layers:
-        print(l)
-    # exit(0)
-    """
+
     # Fully connected layer is not needed
     layer_vis = CNNLayerVisualization(model, flags.layer_index, flags.filter_index)
 
@@ -239,7 +221,7 @@ def parallel_filter_calc(combined_input):
     # TODO: change this data storage stuff so that both the mean and sum are stored
     #  (maybe make a nested dict for mean/sum or default/optimal)
     models, model_name, comparison_name = combined_input
-    return single_filter_comp(models[comparison_name], models[model_name])
+    return single_filter_comp(models[comparison_name], models[model_name], not flags.comp_dist_only)
 
 
 def filter_comp(flags):
@@ -300,6 +282,8 @@ def filter_comp(flags):
             } for s in ["default", "optimal"]
         } for n in single_task_names
     }
+    for n in single_task_names:
+        single_multi_data[n]["dist"] = []
     single_multipop_data = {
         n: {
             s: {
@@ -307,11 +291,14 @@ def filter_comp(flags):
             } for s in ["default", "optimal"]
         } for n in single_task_names
     }
+    for n in single_task_names:
+        single_multipop_data[n]["dist"] = []
     multi_multipop_data = {
         s: {
             t: [] for t in ["sum", "mean"]
         } for s in ["default", "optimal"]
     }
+    multi_multipop_data["dist"] = []
     for t in range(flags.comp_num_models + (1 if flags.match_num_models else 0)):
         # load checkpoints for each model
         logging.info("Loading checkpoints for all models ({}/{}).".format(t + 1, flags.comp_num_models))
@@ -327,6 +314,7 @@ def filter_comp(flags):
             full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_name) for mn in single_task_names])
         for model_name, data in zip(single_task_names, full_data):
             dist, dd_data, od_data = data
+            single_multi_data[model_name]["dist"].append(dist)
             single_multi_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
             single_multi_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
             single_multi_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
@@ -339,6 +327,7 @@ def filter_comp(flags):
             full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_popart_name) for mn in single_task_names])
         for model_name, data in zip(single_task_names, full_data):
             dist, dd_data, od_data = data
+            single_multipop_data[model_name]["dist"].append(dist)
             single_multipop_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
             single_multipop_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
             single_multipop_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
@@ -347,7 +336,10 @@ def filter_comp(flags):
         # compare multi-task and multi-task PopArt models
         logging.info("Comparing vanilla multi-task and multi-task PopArt models ({}/{})."
                      .format(t + 1, flags.comp_num_models))
-        dist, dd_data, od_data = single_filter_comp(models[multi_task_popart_name], models[multi_task_name])
+        dist, dd_data, od_data = single_filter_comp(models[multi_task_popart_name], models[multi_task_name],
+                                                    not flags.comp_dist_only)
+        print(dist[0].shape, len(dist))
+        multi_multipop_data["dist"].append(dist)
         multi_multipop_data["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
         multi_multipop_data["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
         multi_multipop_data["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
@@ -355,7 +347,11 @@ def filter_comp(flags):
 
     def update_dict(d):
         if type(d) == list:
-            return np.stack(d)
+            if type(d[0]) == list:
+                result = [np.stack([d[time][filter] for time in range(len(d))]) for filter in range(len(d[0]))]
+            else:
+                result = np.stack(d)
+            return result
         else:
             for k in d:
                 d[k] = update_dict(d[k])
@@ -368,7 +364,8 @@ def filter_comp(flags):
         dictionary = update_dict(dictionary)
         full_path = os.path.join(
             os.path.expanduser(flags.save_dir),
-            "filter_comp", "{}_{}".format(flags.comp_num_models, "match" if flags.match_num_models else "no_match"),
+            "filter_comp", "{}_{}{}".format(flags.comp_num_models, "match" if flags.match_num_models else "no_match",
+                                            "_dist_only" if flags.comp_dist_only else ""),
             file_name + ".pkl"
         )
         if not os.path.exists(os.path.dirname(full_path)):
@@ -478,6 +475,8 @@ if __name__ == '__main__':
     parser.add_argument("--match_num_models", action="store_true",
                         help="...")
     parser.add_argument("--comp_num_models", type=int, default=10,
+                        help="How many models...")
+    parser.add_argument("--comp_dist_only", action="store_true",
                         help="How many models...")
 
     # correct model params

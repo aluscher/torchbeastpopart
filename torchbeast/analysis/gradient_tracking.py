@@ -1,6 +1,6 @@
 import os
 import tempfile
-import itertools as IT
+import itertools as it
 import tabulate
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,7 +9,7 @@ from matplotlib.lines import Line2D
 
 def uniquify(path, sep=''):
     def name_sequence():
-        count = IT.count()
+        count = it.count()
         yield ''
         while True:
             yield '{s}{n:d}'.format(s = sep, n = next(count))
