@@ -12,6 +12,7 @@ import seaborn as sns
 from matplotlib.patches import Rectangle
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
+from matplotlib import cm
 from tqdm import tqdm
 
 import torch
@@ -144,19 +145,13 @@ class CNNLayerVisualization:
 ########################################################################################################################
 
 
-all_layers = []
-
-
-def remove_sequential(network):
-    for layer in network.children():
-        if type(layer) in [torch.nn.Sequential, torch.nn.ModuleList]:
-            remove_sequential(layer)
-        if not list(layer.children()):
-            all_layers.append(layer)
+single_task_names = ["Carnival", "AirRaid", "DemonAttack", "NameThisGame", "Pong", "SpaceInvaders"]
+multi_task_name = "MultiTask"
+multi_task_popart_name = "MultiTaskPopart"
 
 
 def filter_vis(flags):
-    paths = flags.model_load_path.split(",")
+    paths = flags.load_path.split(",")
     if len(paths) > 1:
         logging.warning("More than one model specified for filter visualisation. "
                         "Only the first model will be visualised.")
@@ -225,9 +220,6 @@ def parallel_filter_calc(combined_input):
 
 
 def filter_comp(flags):
-    single_task_names = ["Carnival", "AirRaid", "DemonAttack", "NameThisGame", "Pong", "SpaceInvaders"]
-    multi_task_name = "MultiTask"
-    multi_task_popart_name = "MultiTaskPopart"
     model_names = single_task_names + [multi_task_name] + [multi_task_popart_name]
 
     # 1. get the model base directory
@@ -241,7 +233,7 @@ def filter_comp(flags):
     # 5. write values to separate CSV files and store them as well
     # 6. display stuff
 
-    base_path = flags.model_load_path.split(",")
+    base_path = flags.load_path.split(",")
     if len(base_path) > 1:
         logging.warning("More than one path specified for filter progress visualization. "
                         "In this mode only the base directory is required. Using only the first path.")
@@ -274,6 +266,8 @@ def filter_comp(flags):
         selected_model_paths.append((model_name, selected_models))
 
     # go through each time step
+    # TODO: add single-single comparison (for at least one model)
+    # TODO: add comparison between time steps
     logging.info("Starting the computation.")
     single_multi_data = {
         n: {
@@ -282,8 +276,9 @@ def filter_comp(flags):
             } for s in ["default", "optimal"]
         } for n in single_task_names
     }
-    for n in single_task_names:
-        single_multi_data[n]["dist"] = []
+    if flags.comp_dist_only:
+        for n in single_task_names:
+            single_multi_data[n]["dist"] = []
     single_multipop_data = {
         n: {
             s: {
@@ -291,14 +286,16 @@ def filter_comp(flags):
             } for s in ["default", "optimal"]
         } for n in single_task_names
     }
-    for n in single_task_names:
-        single_multipop_data[n]["dist"] = []
+    if flags.comp_dist_only:
+        for n in single_task_names:
+            single_multipop_data[n]["dist"] = []
     multi_multipop_data = {
         s: {
             t: [] for t in ["sum", "mean"]
         } for s in ["default", "optimal"]
     }
-    multi_multipop_data["dist"] = []
+    if flags.comp_dist_only:
+        multi_multipop_data["dist"] = []
     for t in range(flags.comp_num_models + (1 if flags.match_num_models else 0)):
         # load checkpoints for each model
         logging.info("Loading checkpoints for all models ({}/{}).".format(t + 1, flags.comp_num_models))
@@ -314,7 +311,8 @@ def filter_comp(flags):
             full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_name) for mn in single_task_names])
         for model_name, data in zip(single_task_names, full_data):
             dist, dd_data, od_data = data
-            single_multi_data[model_name]["dist"].append(dist)
+            if flags.comp_dist_only:
+                single_multi_data[model_name]["dist"].append(dist)
             single_multi_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
             single_multi_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
             single_multi_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
@@ -327,7 +325,8 @@ def filter_comp(flags):
             full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_popart_name) for mn in single_task_names])
         for model_name, data in zip(single_task_names, full_data):
             dist, dd_data, od_data = data
-            single_multipop_data[model_name]["dist"].append(dist)
+            if flags.comp_dist_only:
+                single_multipop_data[model_name]["dist"].append(dist)
             single_multipop_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
             single_multipop_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
             single_multipop_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
@@ -339,7 +338,8 @@ def filter_comp(flags):
         dist, dd_data, od_data = single_filter_comp(models[multi_task_popart_name], models[multi_task_name],
                                                     not flags.comp_dist_only)
         print(dist[0].shape, len(dist))
-        multi_multipop_data["dist"].append(dist)
+        if flags.comp_dist_only:
+            multi_multipop_data["dist"].append(dist)
         multi_multipop_data["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
         multi_multipop_data["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
         multi_multipop_data["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
@@ -375,8 +375,91 @@ def filter_comp(flags):
         logging.info("Wrote data to file '{}'.".format(full_path))
 
 
+def filter_comp_plot(flags):
+    # TODO: create plots with only the "interesting" layers
+    single_multi_data = None
+    single_multipop_data = None
+    multi_multipop_data = None
+    for f in os.listdir(flags.load_path):
+        print(f)
+        if "single_multi.pkl" in f:
+            with open(os.path.join(flags.load_path, f), "rb") as p:
+                single_multi_data = pickle.load(p)
+        elif "single_multipop.pkl" in f:
+            with open(os.path.join(flags.load_path, f), "rb") as p:
+                single_multipop_data = pickle.load(p)
+        elif "multi_multipop.pkl" in f:
+            with open(os.path.join(flags.load_path, f), "rb") as p:
+                multi_multipop_data = pickle.load(p)
+
+    # some useful stuff
+    num_models = len(single_multi_data[single_task_names[0]]["default"]["mean"])
+    num_layers = len(single_multi_data[single_task_names[0]]["default"]["mean"][0])
+    labels = ["layer_{:02d}".format(l_idx) for l_idx in range(num_layers)]
+    color_idx = np.linspace(0, 1, num_layers)
+    color_map = cm.get_cmap("Blues")
+    single_task_rows = int(np.ceil((len(single_task_names) / 2)))
+    single_task_cols = 2
+
+    # single and vanilla multi-task comparison plot
+    fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
+                           figsize=(single_task_cols * 4, single_task_rows * 3,),
+                           sharex=True, sharey=True)
+    for i in range(len(ax)):
+        for j in range(len(ax[0])):
+            for color, data, label in zip(color_idx,
+                                          single_multi_data[single_task_names[i + j]][
+                                              flags.plot_match_type][flags.plot_metric_type].T,
+                                          labels):
+                ax[i][j].plot(data, color=color_map(color), label=label)
+            ax[i][j].set_title(single_task_names[i + j])
+    fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
+    fig.text(0.04, 0.5, "SSD ({}) between corresponding filters ({} match)"
+             .format(flags.plot_metric_type, flags.plot_match_type), va="center", rotation="vertical")
+    if flags.save_figures:
+        plt.savefig(os.path.join(flags.load_path, "single_multi_{}_{}.png"
+                                 .format(flags.plot_match_type, flags.plot_metric_type)))
+    if not flags.hide_plots:
+        plt.show()
+
+    # single and multi-task PopArt comparison plot
+    fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
+                           figsize=(single_task_cols * 4, single_task_rows * 3),
+                           sharex=True, sharey=True)
+    for i in range(len(ax)):
+        for j in range(len(ax[0])):
+            for color, data, label in zip(color_idx,
+                                          single_multipop_data[single_task_names[i + j]][
+                                              flags.plot_match_type][flags.plot_metric_type].T,
+                                          labels):
+                ax[i][j].plot(data, color=color_map(color), label=label)
+            ax[i][j].set_title(single_task_names[i + j])
+    fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
+    fig.text(0.04, 0.5, "SSD ({}) between corresponding filters ({} match)"
+             .format(flags.plot_metric_type, flags.plot_match_type), va="center", rotation="vertical")
+    plt.savefig(os.path.join(flags.load_path, "single_multipop_{}_{}.png"
+                             .format(flags.plot_match_type, flags.plot_metric_type)))
+    if not flags.hide_plots:
+        plt.show()
+
+    # vanilla multi-task and multi-task PopArt comparison plot
+    fig = plt.figure()
+    for color, data, label in zip(color_idx,
+                                  multi_multipop_data[flags.plot_match_type][flags.plot_metric_type].T,
+                                  labels):
+        plt.plot(data, color=color_map(color), label=label)
+    plt.xlabel("Model checkpoints throughout training")
+    plt.ylabel("SSD ({}) between corresponding filters ({} match)"
+               .format(flags.plot_metric_type, flags.plot_match_type))
+    fig.suptitle("MultiTask vs MultiTaskPopart")
+    plt.savefig(os.path.join(flags.load_path, "multi_multipop_{}_{}.png"
+                             .format(flags.plot_match_type, flags.plot_metric_type)))
+    if not flags.hide_plots:
+        plt.show()
+
+
 def _filter_comp(flags):
-    paths = flags.model_load_path.split(",")
+    paths = flags.load_path.split(",")
     if len(paths) == 1:
         raise ValueError("Need to supply paths to two models for filter comparison.")
     models = load_models(paths)
@@ -457,12 +540,12 @@ if __name__ == '__main__':
     logging.basicConfig(format="[%(levelname)s:%(process)d %(module)s:%(lineno)d %(asctime)s] " "%(message)s", level=0)
 
     parser = argparse.ArgumentParser(description="Visualizations for the ResNet")
-    parser.add_argument("--model_load_path", default="./logs/torchbeast",
-                        help="Path to the model that should be used for the visualizations.")
+    parser.add_argument("--load_path", default="./logs/torchbeast",
+                        help="Path to the model (or other data) that should be used for the visualizations.")
     parser.add_argument("--save_dir", default="~/logs/resnet_vis",
                         help=".")
     parser.add_argument("--mode", type=str, default="filter_vis",
-                        choices=["filter_vis", "filter_comp", "_filter_comp"],
+                        choices=["filter_vis", "filter_comp", "_filter_comp", "filter_comp_plot"],
                         help="What visualizations to create.")
     parser.add_argument("--layer_index", type=int, default=0,
                         help="Layer for which to visualize a filter.")
@@ -478,6 +561,17 @@ if __name__ == '__main__':
                         help="How many models...")
     parser.add_argument("--comp_dist_only", action="store_true",
                         help="How many models...")
+
+    parser.add_argument("--plot_match_type", type=str, default="default",
+                        choices=["default", "optimal"],
+                        help="Match between filters.")
+    parser.add_argument("--plot_metric_type", type=str, default="mean",
+                        choices=["mean", "sum"],
+                        help="Metric to use.")
+    parser.add_argument("--save_figures", action="store_true",
+                        help="...")
+    parser.add_argument("--hide_plots", action="store_true",
+                        help="...")
 
     # correct model params
     parser.add_argument("--frame_height", type=int, default=84,
@@ -495,4 +589,5 @@ if __name__ == '__main__':
         _filter_comp(flags)
     elif flags.mode == "filter_comp":
         filter_comp(flags)
-
+    elif flags.mode == "filter_comp_plot":
+        filter_comp_plot(flags)
