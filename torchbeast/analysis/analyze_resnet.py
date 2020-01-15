@@ -148,6 +148,7 @@ class CNNLayerVisualization:
 single_task_names = ["Carnival", "AirRaid", "DemonAttack", "NameThisGame", "Pong", "SpaceInvaders"]
 multi_task_name = "MultiTask"
 multi_task_popart_name = "MultiTaskPopart"
+comparison_choices = ["single_multi", "single_multipop", "multi_multipop", "single_single", "time_steps"]
 
 
 def filter_vis(flags):
@@ -213,10 +214,10 @@ def single_filter_comp(model_a, model_b, compute_optimal=True):
 
 
 def parallel_filter_calc(combined_input):
-    # TODO: change this data storage stuff so that both the mean and sum are stored
-    #  (maybe make a nested dict for mean/sum or default/optimal)
-    models, model_name, comparison_name = combined_input
-    return single_filter_comp(models[comparison_name], models[model_name], not flags.comp_dist_only)
+    models, model_name, comparison = combined_input
+    if type(comparison) is str:
+        return single_filter_comp(models[comparison], models[model_name], not flags.comp_no_optimal)
+    return single_filter_comp(comparison[model_name], models[model_name], not flags.comp_no_optimal)
 
 
 def filter_comp(flags):
@@ -265,10 +266,7 @@ def filter_comp(flags):
         selected_models = [os.path.join(base_path, model_name, "intermediate", checkpoints[i][1]) for i in index]
         selected_model_paths.append((model_name, selected_models))
 
-    # go through each time step
-    # TODO: add single-single comparison (for at least one model)
-    # TODO: add comparison between time steps
-    logging.info("Starting the computation.")
+    # prepare data structures
     single_multi_data = {
         n: {
             s: {
@@ -276,9 +274,13 @@ def filter_comp(flags):
             } for s in ["default", "optimal"]
         } for n in single_task_names
     }
-    if flags.comp_dist_only:
-        for n in single_task_names:
-            single_multi_data[n]["dist"] = []
+    single_single_data = {
+        n: {
+            s: {
+                t: [] for t in ["sum", "mean"]
+            } for s in ["default", "optimal"]
+        } for n in single_task_names if n != flags.comp_single_single_model
+    }
     single_multipop_data = {
         n: {
             s: {
@@ -286,16 +288,29 @@ def filter_comp(flags):
             } for s in ["default", "optimal"]
         } for n in single_task_names
     }
-    if flags.comp_dist_only:
-        for n in single_task_names:
-            single_multipop_data[n]["dist"] = []
     multi_multipop_data = {
         s: {
             t: [] for t in ["sum", "mean"]
         } for s in ["default", "optimal"]
     }
-    if flags.comp_dist_only:
-        multi_multipop_data["dist"] = []
+    time_steps_data = {
+        n: {
+            s: {
+                t: [] for t in ["sum", "mean"]
+            } for s in ["default", "optimal"]
+        } for n in model_names
+    }
+    all_data = {
+        "single_multi": single_multi_data,
+        "single_single": single_single_data,
+        "single_multipop": single_multipop_data,
+        "multi_multipop": multi_multipop_data,
+        "time_steps": time_steps_data
+    }
+
+    # go through each time step
+    logging.info("Starting the computation.")
+    time_steps_last_models = None
     for t in range(flags.comp_num_models + (1 if flags.match_num_models else 0)):
         # load checkpoints for each model
         logging.info("Loading checkpoints for all models ({}/{}).".format(t + 1, flags.comp_num_models))
@@ -305,45 +320,71 @@ def filter_comp(flags):
                 [model_paths[t - (1 if t == flags.comp_num_models and "multi" not in model_name.lower() else 0)]])
 
         # compare single and vanilla multi-task models
-        logging.info("Comparing single-task and vanilla multi-task models ({}/{})."
-                     .format(t + 1, flags.comp_num_models))
-        with mp.Pool(len(single_task_names)) as pool:
-            full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_name) for mn in single_task_names])
-        for model_name, data in zip(single_task_names, full_data):
-            dist, dd_data, od_data = data
-            if flags.comp_dist_only:
-                single_multi_data[model_name]["dist"].append(dist)
-            single_multi_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
-            single_multi_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
-            single_multi_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
-            single_multi_data[model_name]["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
+        if "single_multi" in flags.comp_between:
+            logging.info("Comparing single-task and vanilla multi-task models ({}/{})."
+                         .format(t + 1, flags.comp_num_models))
+            with mp.Pool(len(single_task_names)) as pool:
+                full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_name) for mn in single_task_names])
+            for model_name, data in zip(single_task_names, full_data):
+                dist, dd_data, od_data = data
+                single_multi_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
+                single_multi_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
+                single_multi_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
+                single_multi_data[model_name]["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
+
+        # compare one single-task model with all the others
+        if "single_single" in flags.comp_between:
+            logging.info("Comparing {} single-task with all other single-task models ({}/{})."
+                         .format(flags.comp_single_single_model, t + 1, flags.comp_num_models))
+            with mp.Pool(len(single_task_names)) as pool:
+                full_data = pool.map(parallel_filter_calc, [(models, mn, flags.comp_single_single_model)
+                                                            for mn in single_task_names
+                                                            if mn != flags.comp_single_single_model])
+            for model_name, data in zip([n for n in single_task_names if n != flags.comp_single_single_model],
+                                        full_data):
+                dist, dd_data, od_data = data
+                single_single_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
+                single_single_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
+                single_single_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
+                single_single_data[model_name]["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
 
         # compare single and multi-task PopArt models
-        logging.info("Comparing single-task and multi-task PopArt models ({}/{})."
-                     .format(t + 1, flags.comp_num_models))
-        with mp.Pool(len(single_task_names)) as pool:
-            full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_popart_name) for mn in single_task_names])
-        for model_name, data in zip(single_task_names, full_data):
-            dist, dd_data, od_data = data
-            if flags.comp_dist_only:
-                single_multipop_data[model_name]["dist"].append(dist)
-            single_multipop_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
-            single_multipop_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
-            single_multipop_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
-            single_multipop_data[model_name]["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
+        if "single_multipop" in flags.comp_between:
+            logging.info("Comparing single-task and multi-task PopArt models ({}/{})."
+                         .format(t + 1, flags.comp_num_models))
+            with mp.Pool(len(single_task_names)) as pool:
+                full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_popart_name)
+                                                            for mn in single_task_names])
+            for model_name, data in zip(single_task_names, full_data):
+                dist, dd_data, od_data = data
+                single_multipop_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
+                single_multipop_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
+                single_multipop_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
+                single_multipop_data[model_name]["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
 
         # compare multi-task and multi-task PopArt models
-        logging.info("Comparing vanilla multi-task and multi-task PopArt models ({}/{})."
-                     .format(t + 1, flags.comp_num_models))
-        dist, dd_data, od_data = single_filter_comp(models[multi_task_popart_name], models[multi_task_name],
-                                                    not flags.comp_dist_only)
-        print(dist[0].shape, len(dist))
-        if flags.comp_dist_only:
-            multi_multipop_data["dist"].append(dist)
-        multi_multipop_data["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
-        multi_multipop_data["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
-        multi_multipop_data["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
-        multi_multipop_data["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
+        if "multi_multipop" in flags.comp_between:
+            logging.info("Comparing vanilla multi-task and multi-task PopArt models ({}/{})."
+                         .format(t + 1, flags.comp_num_models))
+            dist, dd_data, od_data = single_filter_comp(models[multi_task_popart_name], models[multi_task_name])
+            multi_multipop_data["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
+            multi_multipop_data["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
+            multi_multipop_data["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
+            multi_multipop_data["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
+
+        if "time_steps" in flags.comp_between:
+            logging.info("Comparing between time steps ({}/{}).".format(t + 1, flags.comp_num_models))
+            if time_steps_last_models:
+                with mp.Pool(len(single_task_names)) as pool:
+                    full_data = pool.map(parallel_filter_calc, [(models, mn, time_steps_last_models)
+                                                                for mn in model_names])
+                for model_name, data in zip(model_names, full_data):
+                    dist, dd_data, od_data = data
+                    time_steps_data[model_name]["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
+                    time_steps_data[model_name]["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
+                    time_steps_data[model_name]["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
+                    time_steps_data[model_name]["optimal"]["mean"].append(np.stack([d[2] for d in od_data]))
+            time_steps_last_models = {mn: models[mn] for mn in models}
 
     def update_dict(d):
         if type(d) == list:
@@ -358,15 +399,16 @@ def filter_comp(flags):
             return d
 
     # write data to files
-    for dictionary, file_name in [(single_multi_data, "single_multi"),
-                                  (single_multipop_data, "single_multipop"),
-                                  (multi_multipop_data, "multi_multipop")]:
+    for file_name, dictionary in all_data.items():
+        if file_name not in flags.comp_between:
+            continue
+
         dictionary = update_dict(dictionary)
         full_path = os.path.join(
             os.path.expanduser(flags.save_dir),
-            "filter_comp", "{}_{}{}".format(flags.comp_num_models, "match" if flags.match_num_models else "no_match",
-                                            "_dist_only" if flags.comp_dist_only else ""),
-            file_name + ".pkl"
+            "filter_comp", "{}_{}".format(flags.comp_num_models, "match" if flags.match_num_models else "no_match"),
+            "{}{}.pkl".format(file_name, "" if flags.comp_between != "single_single" else "_{}"
+                              .format(flags.comp_single_single_model))
         )
         if not os.path.exists(os.path.dirname(full_path)):
             os.makedirs(os.path.dirname(full_path))
@@ -376,53 +418,66 @@ def filter_comp(flags):
 
 
 def filter_comp_plot(flags):
-    # TODO: create plots with only the "interesting" layers
-    single_multi_data = None
-    single_multipop_data = None
-    multi_multipop_data = None
+    # TODO: maybe create plots with only the "interesting" layers
+    all_data = {}
     for f in os.listdir(flags.load_path):
-        print(f)
-        if "single_multi.pkl" in f:
+        if f[:-4] in comparison_choices:
             with open(os.path.join(flags.load_path, f), "rb") as p:
-                single_multi_data = pickle.load(p)
-        elif "single_multipop.pkl" in f:
-            with open(os.path.join(flags.load_path, f), "rb") as p:
-                single_multipop_data = pickle.load(p)
-        elif "multi_multipop.pkl" in f:
-            with open(os.path.join(flags.load_path, f), "rb") as p:
-                multi_multipop_data = pickle.load(p)
+                all_data[f[:-4]] = pickle.load(p)
 
     # some useful stuff
-    num_models = len(single_multi_data[single_task_names[0]]["default"]["mean"])
-    num_layers = len(single_multi_data[single_task_names[0]]["default"]["mean"][0])
+    num_layers = 15
     labels = ["layer_{:02d}".format(l_idx) for l_idx in range(num_layers)]
     color_idx = np.linspace(0, 1, num_layers)
     color_map = cm.get_cmap("Blues")
-    single_task_rows = int(np.ceil((len(single_task_names) / 2)))
     single_task_cols = 2
 
-    # single and vanilla multi-task comparison plot
-    fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
-                           figsize=(single_task_cols * 4, single_task_rows * 3,),
-                           sharex=True, sharey=True)
-    for i in range(len(ax)):
-        for j in range(len(ax[0])):
+    for comp_choice, current_data in all_data.items():
+        if comp_choice == "multi_multipop":
+            # vanilla multi-task and multi-task PopArt comparison plot
+            fig = plt.figure()
             for color, data, label in zip(color_idx,
-                                          single_multi_data[single_task_names[i + j]][
-                                              flags.plot_match_type][flags.plot_metric_type].T,
+                                          current_data[flags.plot_match_type][flags.plot_metric_type].T,
                                           labels):
-                ax[i][j].plot(data, color=color_map(color), label=label)
-            ax[i][j].set_title(single_task_names[i + j])
-    fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
-    fig.text(0.04, 0.5, "SSD ({}) between corresponding filters ({} match)"
-             .format(flags.plot_metric_type, flags.plot_match_type), va="center", rotation="vertical")
-    if flags.save_figures:
-        plt.savefig(os.path.join(flags.load_path, "single_multi_{}_{}.png"
-                                 .format(flags.plot_match_type, flags.plot_metric_type)))
-    if not flags.hide_plots:
-        plt.show()
+                plt.plot(data, color=color_map(color), label=label)
+            plt.xlabel("Model checkpoints throughout training")
+            plt.ylabel("SSD ({}) between corresponding filters ({} match)"
+                       .format(flags.plot_metric_type, flags.plot_match_type))
+            plt.savefig(os.path.join(flags.load_path, "multi_multipop_{}_{}.png"
+                                     .format(flags.plot_match_type, flags.plot_metric_type)))
+        else:
+            if comp_choice == "time_steps":
+                single_task_cols = 3
+            single_task_rows = int(np.ceil((len(current_data) / single_task_cols)))
+            fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
+                                   figsize=(single_task_cols * 4, single_task_rows * 3,),
+                                   sharex=True, sharey=True)
+            for i in range(len(ax)):
+                for j in range(len(ax[i])):
+                    if i * single_task_cols + j == len(current_data):
+                        ax[i][j].axis("off")
+                        continue
+                    for color, data, label in zip(color_idx,
+                                                  current_data[list(current_data.keys())[i * single_task_cols + j]][
+                                                      flags.plot_match_type][flags.plot_metric_type].T,
+                                                  labels):
+                        ax[i][j].plot(data, color=color_map(color), label=label)
+                    ax[i][j].set_title(list(current_data.keys())[i * single_task_cols + j])
+            fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
+            fig.text(0.04, 0.5, "SSD ({}) between corresponding filters ({} match)"
+                     .format(flags.plot_metric_type, flags.plot_match_type), va="center", rotation="vertical")
+            if flags.save_figures:
+                plt.savefig(os.path.join(flags.load_path, "{}_{}_{}{}.png"
+                                         .format(comp_choice, flags.plot_match_type, flags.plot_metric_type,
+                                                 "" if comp_choice != "single_single" else
+                                                 list(mn for mn in single_task_names if mn not in current_data)[0])))
+
+        fig.suptitle(comp_choice)
+        if not flags.hide_plots:
+            plt.show()
 
     # single and multi-task PopArt comparison plot
+    """
     fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
                            figsize=(single_task_cols * 4, single_task_rows * 3),
                            sharex=True, sharey=True)
@@ -441,21 +496,7 @@ def filter_comp_plot(flags):
                              .format(flags.plot_match_type, flags.plot_metric_type)))
     if not flags.hide_plots:
         plt.show()
-
-    # vanilla multi-task and multi-task PopArt comparison plot
-    fig = plt.figure()
-    for color, data, label in zip(color_idx,
-                                  multi_multipop_data[flags.plot_match_type][flags.plot_metric_type].T,
-                                  labels):
-        plt.plot(data, color=color_map(color), label=label)
-    plt.xlabel("Model checkpoints throughout training")
-    plt.ylabel("SSD ({}) between corresponding filters ({} match)"
-               .format(flags.plot_metric_type, flags.plot_match_type))
-    fig.suptitle("MultiTask vs MultiTaskPopart")
-    plt.savefig(os.path.join(flags.load_path, "multi_multipop_{}_{}.png"
-                             .format(flags.plot_match_type, flags.plot_metric_type)))
-    if not flags.hide_plots:
-        plt.show()
+    """
 
 
 def _filter_comp(flags):
@@ -559,8 +600,13 @@ if __name__ == '__main__':
                         help="...")
     parser.add_argument("--comp_num_models", type=int, default=10,
                         help="How many models...")
-    parser.add_argument("--comp_dist_only", action="store_true",
-                        help="How many models...")
+    parser.add_argument("--comp_no_optimal", action="store_true",
+                        help="Whether to compute the optimal filter matching.")
+    parser.add_argument("--comp_between", type=str, nargs="+", choices=comparison_choices,
+                        default=["single_multi", "single_multipop", "multi_multipop"],
+                        help="...")
+    parser.add_argument("--comp_single_single_model", type=str, default="Carnival", choices=single_task_names,
+                        help="...")
 
     parser.add_argument("--plot_match_type", type=str, default="default",
                         choices=["default", "optimal"],
