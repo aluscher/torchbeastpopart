@@ -430,16 +430,19 @@ def filter_comp_plot(flags):
     labels = ["layer_{:02d}".format(l_idx) for l_idx in range(num_layers)]
     color_idx = np.linspace(0, 1, num_layers)
     color_map = cm.get_cmap("Blues")
-    single_task_cols = 2
 
     for comp_choice, current_data in all_data.items():
         if comp_choice == "multi_multipop":
             # vanilla multi-task and multi-task PopArt comparison plot
             fig = plt.figure()
-            for color, data, label in zip(color_idx,
-                                          current_data[flags.plot_match_type][flags.plot_metric_type].T,
-                                          labels):
-                plt.plot(data, color=color_map(color), label=label)
+            data = current_data[flags.plot_match_type][flags.plot_metric_type]
+            if flags.plot_heatmaps:
+                plt.imshow(data.T)
+                plt.xticks(np.arange(data.shape[0]), np.arange(data.shape[0]))
+                plt.yticks(np.arange(num_layers), np.arange(num_layers))
+            else:
+                for color, d, label in zip(color_idx, data.T, labels):
+                    plt.plot(d, color=color_map(color), label=label)
             plt.xlabel("Model checkpoints throughout training")
             plt.ylabel("SSD ({}) between corresponding filters ({} match)"
                        .format(flags.plot_metric_type, flags.plot_match_type))
@@ -448,6 +451,8 @@ def filter_comp_plot(flags):
         else:
             if comp_choice == "time_steps":
                 single_task_cols = 3
+            else:
+                single_task_cols = 2
             single_task_rows = int(np.ceil((len(current_data) / single_task_cols)))
             fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
                                    figsize=(single_task_cols * 4, single_task_rows * 3,),
@@ -457,11 +462,18 @@ def filter_comp_plot(flags):
                     if i * single_task_cols + j == len(current_data):
                         ax[i][j].axis("off")
                         continue
-                    for color, data, label in zip(color_idx,
-                                                  current_data[list(current_data.keys())[i * single_task_cols + j]][
-                                                      flags.plot_match_type][flags.plot_metric_type].T,
-                                                  labels):
-                        ax[i][j].plot(data, color=color_map(color), label=label)
+
+                    data = current_data[list(current_data.keys())[i * single_task_cols + j]][
+                        flags.plot_match_type][flags.plot_metric_type]
+                    if flags.plot_heatmaps:
+                        ax[i][j].imshow(data.T)
+                        ax[i][j].set_xticks(np.arange(data.shape[0]))
+                        ax[i][j].set_yticks(np.arange(num_layers))
+                        ax[i][j].set_xticklabels(np.arange(data.shape[0]))
+                        ax[i][j].set_yticklabels(np.arange(num_layers))
+                    else:
+                        for color, d, label in zip(color_idx, data, labels):
+                            ax[i][j].plot(d, color=color_map(color), label=label)
                     ax[i][j].set_title(list(current_data.keys())[i * single_task_cols + j])
             fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
             fig.text(0.04, 0.5, "SSD ({}) between corresponding filters ({} match)"
@@ -614,6 +626,8 @@ if __name__ == '__main__':
     parser.add_argument("--plot_metric_type", type=str, default="mean",
                         choices=["mean", "sum"],
                         help="Metric to use.")
+    parser.add_argument("--plot_heatmaps", action="store_true",
+                        help="...")
     parser.add_argument("--save_figures", action="store_true",
                         help="...")
     parser.add_argument("--hide_plots", action="store_true",
