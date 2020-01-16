@@ -25,7 +25,7 @@ from PIL import Image
 from torchbeast.resnet_monobeast import ResNet as ResNetMono
 from torchbeast.core.popart import PopArtLayer
 
-logging.getLogger('matplotlib.font_manager').disabled = True
+logging.getLogger("matplotlib.font_manager").disabled = True
 
 ########################################################################################################################
 # From https://github.com/utkuozbulak/pytorch-cnn-visualizations                                                       #
@@ -191,8 +191,8 @@ def single_filter_comp(model_a, model_b, compute_optimal=True):
 
         # compute distances
         distances = cdist(original, comparison, metric="sqeuclidean")
-        default_dist_sum = distances[0, :].sum()
-        default_dist_mean = distances[0, :].mean()
+        default_dist_sum = np.diagonal(distances).sum()
+        default_dist_mean = np.diagonal(distances).mean()
 
         # compute optimal assignment
         if compute_optimal:
@@ -202,9 +202,6 @@ def single_filter_comp(model_a, model_b, compute_optimal=True):
         else:
             optimal_dist_sum = 0
             optimal_dist_mean = 0
-
-        # print("Default distance sum/mean: {}/{}".format(default_dist_sum, default_dist_mean))
-        # print("Optimal distance sum/mean: {}/{}".format(optimal_dist_sum, optimal_dist_mean))
 
         distance_data.append(distances)
         default_dist_data.append((f.shape, default_dist_sum, default_dist_mean))
@@ -336,7 +333,8 @@ def filter_comp(flags):
         if "single_single" in flags.comp_between:
             logging.info("Comparing {} single-task with all other single-task models ({}/{})."
                          .format(flags.comp_single_single_model, t + 1, flags.comp_num_models))
-            with mp.Pool(min(len(single_task_names) - 1, os.cpu_count())) as pool:
+            # with mp.Pool(min(len(single_task_names) - 1, os.cpu_count())) as pool:
+            with mp.Pool(1) as pool:
                 full_data = pool.map(parallel_filter_calc, [(models, mn, flags.comp_single_single_model)
                                                             for mn in single_task_names
                                                             if mn != flags.comp_single_single_model])
@@ -418,10 +416,17 @@ def filter_comp(flags):
 
 
 def filter_comp_plot(flags):
-    # TODO: maybe create plots with only the "interesting" layers
+    plot_titles = {
+        "single_multi": "Single-task and vanilla multi-task",
+        "single_multipop": "Single-task and multi-task with PopArt",
+        "multi_multipop": "Vanilla multi-task and multi-task with PopArt",
+        "single_single": "{} with the other single-task models",
+        "time_steps": "Difference between models over training iterations"
+    }
+
     all_data = {}
     for f in os.listdir(flags.load_path):
-        if f[:-4] in comparison_choices:
+        if f.endswith(".pkl") and (f[:-4] in comparison_choices or "single_single" in f):
             with open(os.path.join(flags.load_path, f), "rb") as p:
                 all_data[f[:-4]] = pickle.load(p)
 
@@ -434,7 +439,8 @@ def filter_comp_plot(flags):
     for comp_choice, current_data in all_data.items():
         if comp_choice == "multi_multipop":
             # vanilla multi-task and multi-task PopArt comparison plot
-            fig = plt.figure()
+            plt.figure()
+            ax = plt.gca()
             data = current_data[flags.plot_match_type][flags.plot_metric_type]
             if flags.plot_heatmaps:
                 plt.imshow(data.T)
@@ -443,9 +449,12 @@ def filter_comp_plot(flags):
             else:
                 for color, d, label in zip(color_idx, data.T, labels):
                     plt.plot(d, color=color_map(color), label=label)
+                ax.set_xticks(np.arange(data.shape[0]))
+                ax.grid(linestyle="dashed", linewidth="0.5", color="gray")
             plt.xlabel("Model checkpoints throughout training")
             plt.ylabel("SSD ({}) between corresponding filters ({} match)"
                        .format(flags.plot_metric_type, flags.plot_match_type))
+            plt.title(plot_titles[comp_choice])
             plt.savefig(os.path.join(flags.load_path, "multi_multipop_{}_{}.png"
                                      .format(flags.plot_match_type, flags.plot_metric_type)))
         else:
@@ -453,9 +462,11 @@ def filter_comp_plot(flags):
                 single_task_cols = 3
             else:
                 single_task_cols = 2
+                if "single_single" in comp_choice:
+                    comp_choice = "single_single"
             single_task_rows = int(np.ceil((len(current_data) / single_task_cols)))
             fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
-                                   figsize=(single_task_cols * 4, single_task_rows * 3,),
+                                   figsize=(single_task_cols * 3, single_task_rows * 2.5,),
                                    sharex=True, sharey=True)
             for i in range(len(ax)):
                 for j in range(len(ax[i])):
@@ -474,41 +485,22 @@ def filter_comp_plot(flags):
                     else:
                         for color, d, label in zip(color_idx, data.T, labels):
                             ax[i][j].plot(d, color=color_map(color), label=label)
+                        ax[i][j].set_xticks(np.arange(data.shape[0]))
+                        ax[i][j].grid(linestyle="dashed", linewidth="0.5", color="gray")
                     ax[i][j].set_title(list(current_data.keys())[i * single_task_cols + j])
             fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
-            fig.text(0.04, 0.5, "SSD ({}) between corresponding filters ({} match)"
+            fig.text(0.02, 0.5, "SSD ({}) between corresponding filters ({} match)"
                      .format(flags.plot_metric_type, flags.plot_match_type), va="center", rotation="vertical")
+            fig.suptitle(plot_titles[comp_choice] if comp_choice != "single_single" else plot_titles[comp_choice]
+                         .format(list(mn for mn in single_task_names if mn not in current_data)[0]))
             if flags.save_figures:
                 plt.savefig(os.path.join(flags.load_path, "{}_{}_{}{}.png"
                                          .format(comp_choice, flags.plot_match_type, flags.plot_metric_type,
                                                  "" if comp_choice != "single_single" else
                                                  list(mn for mn in single_task_names if mn not in current_data)[0])))
 
-        fig.suptitle(comp_choice)
         if not flags.hide_plots:
             plt.show()
-
-    # single and multi-task PopArt comparison plot
-    """
-    fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
-                           figsize=(single_task_cols * 4, single_task_rows * 3),
-                           sharex=True, sharey=True)
-    for i in range(len(ax)):
-        for j in range(len(ax[0])):
-            for color, data, label in zip(color_idx,
-                                          single_multipop_data[single_task_names[i + j]][
-                                              flags.plot_match_type][flags.plot_metric_type].T,
-                                          labels):
-                ax[i][j].plot(data, color=color_map(color), label=label)
-            ax[i][j].set_title(single_task_names[i + j])
-    fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
-    fig.text(0.04, 0.5, "SSD ({}) between corresponding filters ({} match)"
-             .format(flags.plot_metric_type, flags.plot_match_type), va="center", rotation="vertical")
-    plt.savefig(os.path.join(flags.load_path, "single_multipop_{}_{}.png"
-                             .format(flags.plot_match_type, flags.plot_metric_type)))
-    if not flags.hide_plots:
-        plt.show()
-    """
 
 
 def _filter_comp(flags):
