@@ -323,7 +323,7 @@ def filter_comp(flags):
         if "single_multi" in flags.comp_between:
             logging.info("Comparing single-task and vanilla multi-task models ({}/{})."
                          .format(t + 1, flags.comp_num_models))
-            with mp.Pool(len(single_task_names)) as pool:
+            with mp.Pool(min(len(single_task_names), os.cpu_count())) as pool:
                 full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_name) for mn in single_task_names])
             for model_name, data in zip(single_task_names, full_data):
                 dist, dd_data, od_data = data
@@ -336,7 +336,7 @@ def filter_comp(flags):
         if "single_single" in flags.comp_between:
             logging.info("Comparing {} single-task with all other single-task models ({}/{})."
                          .format(flags.comp_single_single_model, t + 1, flags.comp_num_models))
-            with mp.Pool(len(single_task_names)) as pool:
+            with mp.Pool(min(len(single_task_names) - 1, os.cpu_count())) as pool:
                 full_data = pool.map(parallel_filter_calc, [(models, mn, flags.comp_single_single_model)
                                                             for mn in single_task_names
                                                             if mn != flags.comp_single_single_model])
@@ -352,7 +352,7 @@ def filter_comp(flags):
         if "single_multipop" in flags.comp_between:
             logging.info("Comparing single-task and multi-task PopArt models ({}/{})."
                          .format(t + 1, flags.comp_num_models))
-            with mp.Pool(len(single_task_names)) as pool:
+            with mp.Pool(min(len(single_task_names), os.cpu_count())) as pool:
                 full_data = pool.map(parallel_filter_calc, [(models, mn, multi_task_popart_name)
                                                             for mn in single_task_names])
             for model_name, data in zip(single_task_names, full_data):
@@ -375,7 +375,7 @@ def filter_comp(flags):
         if "time_steps" in flags.comp_between:
             logging.info("Comparing between time steps ({}/{}).".format(t + 1, flags.comp_num_models))
             if time_steps_last_models:
-                with mp.Pool(len(single_task_names)) as pool:
+                with mp.Pool(min(len(model_names), os.cpu_count())) as pool:
                     full_data = pool.map(parallel_filter_calc, [(models, mn, time_steps_last_models)
                                                                 for mn in model_names])
                 for model_name, data in zip(model_names, full_data):
@@ -407,7 +407,7 @@ def filter_comp(flags):
         full_path = os.path.join(
             os.path.expanduser(flags.save_dir),
             "filter_comp", "{}_{}".format(flags.comp_num_models, "match" if flags.match_num_models else "no_match"),
-            "{}{}.pkl".format(file_name, "" if flags.comp_between != "single_single" else "_{}"
+            "{}{}.pkl".format(file_name, "" if file_name != "single_single" else "_{}"
                               .format(flags.comp_single_single_model))
         )
         if not os.path.exists(os.path.dirname(full_path)):
@@ -472,7 +472,7 @@ def filter_comp_plot(flags):
                         ax[i][j].set_xticklabels(np.arange(data.shape[0]))
                         ax[i][j].set_yticklabels(np.arange(num_layers))
                     else:
-                        for color, d, label in zip(color_idx, data, labels):
+                        for color, d, label in zip(color_idx, data.T, labels):
                             ax[i][j].plot(d, color=color_map(color), label=label)
                     ax[i][j].set_title(list(current_data.keys())[i * single_task_cols + j])
             fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
