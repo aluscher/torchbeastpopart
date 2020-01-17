@@ -36,11 +36,11 @@ from torchbeast.core import file_writer
 from torchbeast.core import prof
 from torchbeast.core import vtrace
 
-from torchbeast.attention_augmented_agent import AttentionAugmentedAgent
-from torchbeast.resnet_monobeast import ResNet
-from torchbeast.atari_net_monobeast import AtariNet
+from torchbeast.models.attention_augmented_agent import AttentionAugmentedAgent
+from torchbeast.models.resnet_monobeast import ResNet
+from torchbeast.models.atari_net_monobeast import AtariNet
 
-from torchbeast.analysis.gradient_tracking import plot_grad_flow, GradientTracker
+from torchbeast.analysis.gradient_tracking import GradientTracker
 
 
 # yapf: disable

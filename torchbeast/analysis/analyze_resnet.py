@@ -19,8 +19,7 @@ from PIL import Image
 
 # from misc_functions import preprocess_image, recreate_image, save_image
 # from torchbeast.polybeast import Net as ResNetPoly
-from torchbeast.resnet_monobeast import ResNet as ResNetMono
-from torchbeast.core.popart import PopArtLayer
+from torchbeast.models.resnet_monobeast import ResNet as ResNetMono
 
 logging.getLogger("matplotlib.font_manager").disabled = True
 
@@ -614,19 +613,34 @@ if __name__ == '__main__':
                              "not just corresponding ones (only in mode '_filter_comp').")
 
     # filter_comp parameters
-    parser.add_argument("--match_num_models", action="store_true")
-    parser.add_argument("--comp_num_models", type=int, default=10)
-    parser.add_argument("--comp_no_optimal", action="store_true")
+    parser.add_argument("--match_num_models", action="store_true",
+                        help="When comparing between single-task and multi-task models, compare between models "
+                             "trained for the same number of steps instead of percentage of training time.")
+    parser.add_argument("--comp_num_models", type=int, default=10,
+                        help="Number of model checkpoints to load and to compare.")
+    parser.add_argument("--comp_no_optimal", action="store_true",
+                        help="Do not compute the mean SSDs for the optimal matching "
+                             "between filters (which can take a long time)")
     parser.add_argument("--comp_between", type=str, nargs="+", choices=comparison_choices,
-                        default=["single_multi", "single_multipop", "multi_multipop"])
-    parser.add_argument("--comp_single_single_model", type=str, default="Carnival", choices=single_task_names)
+                        default=["single_multi", "single_multipop", "multi_multipop"],
+                        help="List what types of comparisons should be made (choices mostly self-explanatory).")
+    parser.add_argument("--comp_single_single_model", type=str, default="Carnival", choices=single_task_names,
+                        help="When comparing single-task models, which model to take "
+                             "as the reference to compare the other models with.")
 
     # filter_comp_plot parameters
-    parser.add_argument("--plot_match_type", type=str, default="default", choices=["default", "optimal"])
-    parser.add_argument("--plot_metric_type", type=str, default="mean", choices=["mean", "sum"])
-    parser.add_argument("--plot_heatmaps", action="store_true")
-    parser.add_argument("--save_figures", action="store_true")
-    parser.add_argument("--hide_plots", action="store_true")
+    parser.add_argument("--plot_match_type", type=str, default="default", choices=["default", "optimal"],
+                        help="Which type of matching between filters to plot (default or optimal).")
+    parser.add_argument("--plot_metric_type", type=str, default="mean", choices=["mean", "sum"],
+                        help="Which metric to plot (sum or mean of SSDs in each layer).")
+    parser.add_argument("--plot_heatmaps", action="store_true",
+                        help="Plot heatmaps instead of normal plots.")
+    parser.add_argument("--save_figures", action="store_true",
+                        help="Save the generated figures to the directory which the "
+                             "data was loaded from (specified with --load_path).")
+    parser.add_argument("--hide_plots", action="store_true",
+                        help="Do not display the plots. Mostly useful if one just "
+                             "wants to generate the figures to save them.")
 
     # correct model params
     parser.add_argument("--frame_height", type=int, default=84,
