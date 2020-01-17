@@ -60,7 +60,6 @@ class ConvLSTMCell(nn.Module):
         )
 
     def forward(self, x, prev_hidden=()):
-        # TODO: should consider moving this to the constructor because this seems like really bad practice
         if self.Wci is None:
             _, _, height, width = x.shape
             hidden = self.hidden_channels
@@ -88,7 +87,7 @@ class VisionNetwork(nn.Module):
         self._in_channels = in_channels
         self._hidden_channels = hidden_channels
 
-        # padding s.t. the output shapes match the paper. TODO: might have to be adjusted...
+        # padding s.t. the output shapes match the paper.
         self.vision_cnn = nn.Sequential(
             nn.Conv2d(in_channels=self._in_channels, out_channels=32, kernel_size=(8, 8), stride=4, padding=1),
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=(4, 4), stride=2, padding=2)
@@ -152,7 +151,6 @@ class SpatialBasis:
         return torch.cat([x, s], dim=3)
 
     def init(self):
-        # TODO: maybe check this again
         h, w, d = self._height, self._width, self._channels
 
         p_h = torch.mul(torch.arange(1, h + 1).unsqueeze(1).float(), torch.ones(1, w).float()) * (np.pi / h)
@@ -353,7 +351,6 @@ class AttentionAugmentedAgent(nn.Module):
             # (batch_size, num_queries, c_v + c_s)
             answer = apply_alpha(answer, values_batch)
 
-            # TODO: check whether one-hot vs single value encoding matters
             # (batch_size, (c_v + c_s) * num_queries + (c_k + c_s) * num_queries + 1 + num_actions)
             answer = torch.cat(
                 torch.chunk(answer, self.num_queries, dim=1)

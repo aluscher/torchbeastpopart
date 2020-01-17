@@ -9,17 +9,13 @@ import warnings
 warnings.filterwarnings("ignore")  # mute warnings, live dangerously ;)
 
 import torch
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as manimation
 import cv2
 
-from scipy.ndimage.filters import gaussian_filter
-from skimage.transform import resize as imresize
-
 from torchbeast.monobeast import create_env
 from torchbeast.core.environment import Environment
-from torchbeast.attention_augmented_agent import AttentionAugmentedAgent
+from torchbeast.models.attention_augmented_agent import AttentionAugmentedAgent
 
 cv2.ocl.setUseOpenCL(False)
 
