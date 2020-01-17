@@ -40,7 +40,7 @@ Saliency:
 ## Trained models
 The following trained models can be downloaded from the [models](models/) directory:
 
-| Name | Environments (NoFrameSkip-v4) | Steps (millions) |
+| Name | Environments (NoFrameskip-v4) | Steps (millions) |
 | ---- |------------- | ---------------- |
 | [AirRaid](models/AirRaid) | AirRaid | 50 |
 | [Carnival](models/Carnival) | Carnival  | 50 |
@@ -63,7 +63,7 @@ Since it is more convenient to get PolyBeast to run, these are the platforms on 
 
 ## Training a model
 ```bash
-python -m torchbeast.polybeast --mode train --xpid MultiTaskPopArt --env AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4 --total_steps 50000000 --use_popart
+python -m torchbeast.polybeast --mode train --xpid MultiTaskPopArt --env AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4 --total_steps 300000000 --use_popart
 ```
 There are the following additional flags, as compared to the original TorchBeast implementation:
 - `use_popart`, to enable to PopArt extension
@@ -71,7 +71,7 @@ There are the following additional flags, as compared to the original TorchBeast
 
 ### With MonoBeast
 ```bash
-python -m torchbeast.monobeast --mode train --xpid MultiTaskPopArt --env AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4 --total_steps 50000000 --use_popart
+python -m torchbeast.monobeast --mode train --xpid MultiTaskPopArt --env AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4 --total_steps 300000000 --use_popart
 ```
 
 In addition MonoBeast can also be used to run two other models: a small CNN (optionally with an LSTM) and an [Attention-Augmented Agent](https://arxiv.org/abs/1906.02500) (models selected with the flag `agent_type`). Unfortunately we did not get this model to train properly, but for the sake of completeness and possible future reference, here are the additional flags that can be used with this model:
