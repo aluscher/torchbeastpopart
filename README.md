@@ -2,7 +2,7 @@
 [PopArt](https://arxiv.org/abs/1809.04474) extension to [TorchBeast](https://github.com/facebookresearch/torchbeast), the PyTorch implementation of [IMPALA](https://github.com/deepmind/scalable_agent).
 
 # Experiments
-The PopArt extension was used to train a multi-task agent for six Atari games (AirRaid, Carnival, DemonAttack, Pong, SpaceInvaders, all with the NoFrameskip-v4 variant) and compared to the corresponding single-task agent and to a simpler mulit-task agent without PopArt normalisation. More details on these experiments can be found in the [report](results/report.pdf).
+The PopArt extension was used to train a multi-task agent for six Atari games (AirRaid, Carnival, DemonAttack, Pong, SpaceInvaders, all with the NoFrameskip-v4 variant) and compared to the corresponding single-task agents and to a simpler mulit-task agent without PopArt normalisation. More details on these experiments can be found in the [report](results/report.pdf).
 
 ## Movies
 
