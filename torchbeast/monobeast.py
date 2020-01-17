@@ -583,7 +583,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         learner_model.load_state_dict(checkpoint_states["model_state_dict"])
         optimizer.load_state_dict(checkpoint_states["optimizer_state_dict"])
         scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
-        # stats = checkpoint_states["stats"] TODO: make this work as well
+        # stats = checkpoint_states["stats"]
         # logging.info(f"Resuming preempted job, current stats:\n{stats}")
 
     # Initialize actor model like learner model.

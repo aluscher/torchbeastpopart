@@ -65,7 +65,7 @@ class Environment:
             frame=frame,
             reward=reward,
             done=done,
-            task=task,  # TODO: not sure if this is even required... don't really need to update the task every time
+            task=task,
             episode_return=episode_return,
             episode_step=episode_step,
             last_action=action,

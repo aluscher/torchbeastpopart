@@ -249,7 +249,7 @@ def filter_comp(flags):
         checkpoints.sort()
 
         if flags.match_num_models and "MultiTask" in model_name:
-            index = list(np.round(np.linspace(0, 50 - 1, flags.comp_num_models)).astype(int))  # TODO: make dynamic
+            index = list(np.round(np.linspace(0, 50 - 1, flags.comp_num_models)).astype(int))
             index.append(len(checkpoints) - 1)
         else:
             index = np.round(np.linspace(0, len(checkpoints) - 1, flags.comp_num_models)).astype(int)
