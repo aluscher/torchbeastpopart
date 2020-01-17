@@ -1,3 +1,6 @@
+# TorchBeastPopArt
+PopArt extension to TorchBeast, the PyTorch implementation of IMPALA.
+
 # Experiments
 
 ## Movies
@@ -23,7 +26,7 @@ Multi-task PopArt:
 ![Pong (Multi-task PopArt)](movies/MultiTaskPopart_300010240_PongNoFrameskip-v4.gif)
 ![SpaceInvaders (Multi-task PopArt)](movies/MultiTaskPopart_300010240_SpaceInvadersNoFrameskip-v4.gif)
 
-Saliency:
+Saliency:  
 ![AirRaid](movies/Saliency_AirRaidNoFrameskip-v4.gif)
 ![Carnival](movies/Saliency_CarnivalNoFrameskip-v4.gif)
 ![DemonAttack](movies/Saliency_DemonAttackNoFrameskip-v4.gif)
@@ -47,23 +50,26 @@ Saliency:
 
 
 # Running the code
-# Train
+# Training a model
 ```bash
-python -m torchbeast.polybeast --mode test --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
-python -m torchbeast.polybeast --mode test_render --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
+python -m torchbeast.polybeast --mode train --xpid MultiTaskPopArt --env AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4 --total_steps 50000000 --use_popart
 ```
+There are th efollowing additional flags, as compared to the original TorchBeast implementation:
+- use_popart, to enable to PopArt extension
+- save_model_every_nsteps, to save intermediate models during training
 
-
-# Test
+# Testing a model
 ```bash
-python -m torchbeast.polybeast --mode test --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
-python -m torchbeast.polybeast --mode test_render --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
+python -m torchbeast.polybeast --mode test --xpid MultiTaskPopArt --env PongNoFrameskip-v4 --savedir=./models
+python -m torchbeast.polybeast --mode test_render --xpid MultiTaskPopArt --env PongNoFrameskip-v4 --savedir=./models
 ```
 
 # Saliency
 ```bash
-python -m torchbeast.saliency --xpid MultiTask --env PongNoFrameskip-v4 --resolution=75 --num_frames 5 --savedir=./logs/torchbeast
+python -m torchbeast.saliency --xpid MultiTask --env PongNoFrameskip-v4 --first_frame 0 --num_frames 100 --savedir=./models
 ```
+Note that compared to the original Saliency code, the extension does not produce a movie directly, but saves the frames as individual images. Animated gifs can subsequently produced with a simple Jupyter notebook.
+
 
 ## References
 TorchBeast
@@ -76,6 +82,20 @@ TorchBeast
   url={https://github.com/facebookresearch/torchbeast},
 }
 ```
+
+PopArt
+```
+@inproceedings{hessel2019,
+  title={Multi-task deep reinforcement learning with popart},
+  author={Hessel, Matteo and Soyer, Hubert and Espeholt, Lasse and Czarnecki, Wojciech and Schmitt, Simon and van Hasselt, Hado},
+  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume={33},
+  pages={3796--3803},
+  year={2019}
+}
+```
+
+Saliency
 ```
 @article{greydanus2017visualizing,
   title={Visualizing and Understanding Atari Agents},
