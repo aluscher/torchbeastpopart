@@ -38,17 +38,18 @@ Saliency:
 
 
 ## Trained models
+The following trained models can be downloaded from the [models](models/) directory:
 
-| Name | Environments | Steps (millions) |
+| Name | Environments (NoFrameSkip-v4) | Steps (millions) |
 | ---- |------------- | ---------------- |
-| AirRaid | AirRaidNoFrameskip-v4 | 50 |
-| Carnival | CarnivalNoFrameskip-v4  | 50 |
-| DemonAttack | DemonAttackNoFrameskip-v4 | 50 |
-| NameThisGame| ameThisGameNoFrameskip-v4 | 50 |
-| Pong| PongNoFrameskip-v4 | 50 |
-| SpaceInvaders | SpaceInvadersNoFrameskip-v4 | 50 |
-| MultiTask | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 300 |
-| MultiTaskPopArt | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 300 |
+| [AirRaid](models/AirRaid.tgz) | AirRaid | 50 |
+| [Carnival](models/Carnival.tgz) | Carnival  | 50 |
+| [DemonAttack](models/DemonAttack.tgz) | DemonAttack | 50 |
+| [NameThisGame](models/NameThisGame.tgz) | NameThisGame | 50 |
+| [Pong](models/Pong.tgz) | Pong | 50 |
+| [SpaceInvaders](models/SpaceInvaders.tgz) | SpaceInvaders | 50 |
+| [MultiTask](models/MultiTask.tgz) | AirRaid, Carnival, DemonAttack, NameThisGame, Pong, SpaceInvaders | 300 |
+| [MultiTaskPopArt](models/MultiTaskPopArt.tgz) | AirRaid, Carnival, DemonAttack, NameThisGame, Pong, SpaceInvaders | 300 |
 
 
 # Running the code
@@ -57,8 +58,8 @@ For our experiments we used the faster [PolyBeast](https://github.com/facebookre
 
 Since it is more convenient to get PolyBeast to run, these are the platforms on which we managed to install and use it:
 - Ubuntu 18.04
-- some Mac thingy?
-- Google Server?
+- MacOS (CPU only)
+- Google Cloud Platform (Standard machine with NVIDIA Tesla P100 GPUs)
 
 ## Training a model
 ```bash
