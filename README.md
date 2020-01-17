@@ -42,14 +42,14 @@ The following trained models can be downloaded from the [models](models/) direct
 
 | Name | Environments (NoFrameSkip-v4) | Steps (millions) |
 | ---- |------------- | ---------------- |
-| [AirRaid](models/AirRaid.tgz) | AirRaid | 50 |
-| [Carnival](models/Carnival.tgz) | Carnival  | 50 |
-| [DemonAttack](models/DemonAttack.tgz) | DemonAttack | 50 |
-| [NameThisGame](models/NameThisGame.tgz) | NameThisGame | 50 |
-| [Pong](models/Pong.tgz) | Pong | 50 |
-| [SpaceInvaders](models/SpaceInvaders.tgz) | SpaceInvaders | 50 |
-| [MultiTask](models/MultiTask.tgz) | AirRaid, Carnival, DemonAttack, NameThisGame, Pong, SpaceInvaders | 300 |
-| [MultiTaskPopArt](models/MultiTaskPopArt.tgz) | AirRaid, Carnival, DemonAttack, NameThisGame, Pong, SpaceInvaders | 300 |
+| [AirRaid](models/AirRaid) | AirRaid | 50 |
+| [Carnival](models/Carnival) | Carnival  | 50 |
+| [DemonAttack](models/DemonAttack) | DemonAttack | 50 |
+| [NameThisGame](models/NameThisGame) | NameThisGame | 50 |
+| [Pong](models/Pong) | Pong | 50 |
+| [SpaceInvaders](models/SpaceInvaders) | SpaceInvaders | 50 |
+| [MultiTask](models/MultiTask) | AirRaid, Carnival, DemonAttack, NameThisGame, Pong, SpaceInvaders | 300 |
+| [MultiTaskPopArt](models/MultiTaskPopArt) | AirRaid, Carnival, DemonAttack, NameThisGame, Pong, SpaceInvaders | 300 |
 
 
 # Running the code
