@@ -751,16 +751,19 @@ def test(flags):
         checkpointpath = os.path.expandvars(
             os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar"))
         )
+        meta = checkpointpath.replace("model.tar", "meta.json")
     else:
         if flags.intermediate_model_id is None:
             checkpointpath = os.path.expandvars(
                 os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
             )
+            meta = checkpointpath.replace("model.tar", "meta.json")
         else:
             checkpointpath = os.path.expandvars(
                 os.path.expanduser("%s/%s/%s/%s" % (flags.savedir, flags.xpid, "intermediate", "model." + flags.intermediate_model_id + ".tar"))
             )
-    flags_orig = read_metadata(re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+            meta = re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", "")
+    flags_orig = read_metadata(meta)
     args_orig = flags_orig["args"]
     num_actions = args_orig.get("num_actions")
     num_tasks = args_orig.get("num_tasks", 1)
@@ -793,9 +796,7 @@ def test(flags):
                 env.gym_env.render()
             agent_outputs = model(observation, torch.tensor)
             policy_outputs, _ = agent_outputs
-            #observation = env.step(policy_outputs[0])
-            action = torch.tensor(np.random.randint(0, num_actions))
-            observation = env.step(action)
+            observation = env.step_no_task(policy_outputs[0])
             if observation["done"].item():
                 returns.append(observation["episode_return"].item())
                 logging.info(
@@ -818,16 +819,23 @@ def record(flags):
         checkpointpath = os.path.expandvars(
             os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar"))
         )
+        meta = checkpointpath.replace("model.tar", "meta.json")
+        folder = checkpointpath.replace("model.tar", "/movies/play_raw/")
     else:
         if flags.intermediate_model_id is None:
             checkpointpath = os.path.expandvars(
                 os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
             )
+            meta = checkpointpath.replace("model.tar", "meta.json")
+            folder = checkpointpath.replace("model.tar", "/movies/play_raw/")
         else:
             checkpointpath = os.path.expandvars(
-                os.path.expanduser("%s/%s/%s/%s" % (flags.savedir, flags.xpid, "intermediate", "model." + flags.intermediate_model_id + ".tar"))
+                os.path.expanduser("%s/%s/%s/%s" % (
+                flags.savedir, flags.xpid, "intermediate", "model." + flags.intermediate_model_id + ".tar"))
             )
-    flags_orig = read_metadata(re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+            meta = re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", "")
+            folder = re.sub(r"/model.*tar", "/movies/play_raw/", checkpointpath.replace("/intermediate", ""))
+    flags_orig = read_metadata(meta)
     args_orig = flags_orig["args"]
     num_actions = args_orig.get("num_actions")
     num_tasks = args_orig.get("num_tasks", 1)
@@ -859,7 +867,6 @@ def record(flags):
 
     observation = env.initial()
 
-    folder = re.sub(r"/model.*tar", "/movies/play_raw/", checkpointpath.replace("/intermediate", ""))
     with torch.no_grad():
         for i in range(10000):
             #time.sleep(0.05)
@@ -872,7 +879,7 @@ def record(flags):
             action = policy_outputs[0]
             if len(actions) > 0:
                 action = torch.tensor(actions[i])
-            observation = env.step(action)
+            observation = env.step_no_action(action)
             if observation["done"].item():
                 print("episode_return:", observation["episode_return"], "step:", observation["episode_step"])
                 break

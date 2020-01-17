@@ -71,5 +71,30 @@ class Environment:
             last_action=action,
         )
 
+    def step_no_task(self, action):
+        frame, reward, done, unused_info = self.gym_env.step(action.item())
+        self.episode_step += 1
+        self.episode_return += reward
+        episode_step = self.episode_step
+        episode_return = self.episode_return
+        if done:
+            frame = self.gym_env.reset()
+            self.episode_return = torch.zeros(1, 1)
+            self.episode_step = torch.zeros(1, 1, dtype=torch.int32)
+
+        frame = _format_frame(frame)
+        reward = torch.tensor(reward).view(1, 1)
+        done = torch.tensor(done).view(1, 1)
+
+        return dict(
+            frame=frame,
+            reward=reward,
+            done=done,
+            episode_return=episode_return,
+            episode_step=episode_step,
+            last_action=action,
+        )
+
+
     def close(self):
         self.gym_env.close()

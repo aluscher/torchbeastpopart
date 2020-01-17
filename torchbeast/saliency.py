@@ -1,13 +1,10 @@
 # Visualizing and Understanding Atari Agents | Sam Greydanus | 2017 | MIT License
+# https://github.com/greydanus/visualize_atari
 
 import argparse
 import logging
 import os
-import time
-import warnings
 import re
-
-import pickle
 
 from PIL import Image
 
@@ -17,11 +14,6 @@ import numpy as np
 from scipy.ndimage.filters import gaussian_filter
 
 from skimage.transform import resize as imresize
-
-import matplotlib as mpl
-mpl.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.animation as manimation
 
 import torchbeast.polybeast as tb
 
@@ -92,7 +84,7 @@ def rollout(model, env, max_ep_len=3e3, actions=None):
             agent_outputs = model(observation, torch.tensor)
             policy_outputs, core_state = agent_outputs
             action = policy_outputs[0] if len(actions) == 0 else torch.tensor(actions[episode_length])
-            observation = env.step(action)
+            observation = env.step_no_task(action)
             done = observation["done"]
 
             history["observation"].append(observation)
@@ -248,17 +240,19 @@ if __name__ == "__main__":
         checkpointpath = os.path.expandvars(
             os.path.expanduser("%s/%s/%s" % (flags.savedir, "latest", "model.tar"))
         )
+        meta = checkpointpath.replace("model.tar", "meta.json")
     else:
         if flags.intermediate_model_id is None:
             checkpointpath = os.path.expandvars(
                 os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
             )
+            meta = checkpointpath.replace("model.tar", "meta.json")
         else:
             checkpointpath = os.path.expandvars(
                 os.path.expanduser("%s/%s/%s/%s" % (flags.savedir, flags.xpid, "intermediate", "model." + flags.intermediate_model_id + ".tar"))
             )
-
-    flags_orig = tb.read_metadata(re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", ""))
+            meta = re.sub(r"model.*tar", "meta.json", checkpointpath).replace("/intermediate", "")
+    flags_orig = tb.read_metadata(meta)
     args_orig = flags_orig["args"]
     num_actions = args_orig.get("num_actions")
     num_tasks = args_orig.get("num_tasks", 1)
