@@ -1,15 +1,12 @@
 import os
 import re
-import csv
 import argparse
 import logging
 import pickle
 import numpy as np
 import multiprocessing as mp
 import matplotlib.pyplot as plt
-import seaborn as sns
 
-from matplotlib.patches import Rectangle
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
 from matplotlib import cm
@@ -135,10 +132,6 @@ class CNNLayerVisualization:
                 im = np.round(im * 255)
                 im = np.uint8(im)
                 save_image(im, im_path)
-        # TODO: since this mostly seems to give noise, maybe try something like this:
-        # https://towardsdatascience.com/how-to-visualize-convolutional-features-in-40-lines-of-code-70b7d87b0030
-        # either that or use regularisation
-        # TODO: look at RIAI slides again
 
 ########################################################################################################################
 #                                                                                                                      #
@@ -333,8 +326,7 @@ def filter_comp(flags):
         if "single_single" in flags.comp_between:
             logging.info("Comparing {} single-task with all other single-task models ({}/{})."
                          .format(flags.comp_single_single_model, t + 1, flags.comp_num_models))
-            # with mp.Pool(min(len(single_task_names) - 1, os.cpu_count())) as pool:
-            with mp.Pool(1) as pool:
+            with mp.Pool(min(len(single_task_names) - 1, os.cpu_count())) as pool:
                 full_data = pool.map(parallel_filter_calc, [(models, mn, flags.comp_single_single_model)
                                                             for mn in single_task_names
                                                             if mn != flags.comp_single_single_model])
@@ -364,7 +356,8 @@ def filter_comp(flags):
         if "multi_multipop" in flags.comp_between:
             logging.info("Comparing vanilla multi-task and multi-task PopArt models ({}/{})."
                          .format(t + 1, flags.comp_num_models))
-            dist, dd_data, od_data = single_filter_comp(models[multi_task_popart_name], models[multi_task_name])
+            dist, dd_data, od_data = single_filter_comp(models[multi_task_popart_name], models[multi_task_name],
+                                                        not flags.comp_no_optimal)
             multi_multipop_data["default"]["sum"].append(np.stack([d[1] for d in dd_data]))
             multi_multipop_data["default"]["mean"].append(np.stack([d[2] for d in dd_data]))
             multi_multipop_data["optimal"]["sum"].append(np.stack([d[1] for d in od_data]))
@@ -433,12 +426,11 @@ def filter_comp_plot(flags):
     # some useful stuff
     num_layers = 15
     labels = ["layer_{:02d}".format(l_idx) for l_idx in range(num_layers)]
-    color_idx = np.linspace(0, 1, num_layers)
+    color_idx = np.linspace(0.2, 1.2, num_layers)
     color_map = cm.get_cmap("Blues")
 
     for comp_choice, current_data in all_data.items():
         if comp_choice == "multi_multipop":
-            # vanilla multi-task and multi-task PopArt comparison plot
             plt.figure()
             ax = plt.gca()
             data = current_data[flags.plot_match_type][flags.plot_metric_type]
@@ -451,12 +443,22 @@ def filter_comp_plot(flags):
                     plt.plot(d, color=color_map(color), label=label)
                 ax.set_xticks(np.arange(data.shape[0]))
                 ax.grid(linestyle="dashed", linewidth="0.5", color="gray")
+                plt.ylim(bottom=0)
             plt.xlabel("Model checkpoints throughout training")
             plt.ylabel("SSD ({}) between corresponding filters ({} match)"
                        .format(flags.plot_metric_type, flags.plot_match_type))
             plt.title(plot_titles[comp_choice])
-            plt.savefig(os.path.join(flags.load_path, "multi_multipop_{}_{}.png"
-                                     .format(flags.plot_match_type, flags.plot_metric_type)))
+            if flags.save_figures:
+                plt.savefig(os.path.join(flags.load_path, "multi_multipop_{}_{}.png"
+                                         .format(flags.plot_match_type, flags.plot_metric_type)))
+
+            data_default = current_data["default"]["mean"]
+            data_optimal = current_data["optimal"]["mean"]
+            ratio = np.divide(data_default, data_optimal)
+            """"
+            print("{}: mean = {}, std = {} ({})".format(plot_titles[comp_choice],
+                                                        ratio.mean(), ratio.std(), list(ratio.mean(axis=0))))
+            """
         else:
             if comp_choice == "time_steps":
                 single_task_cols = 3
@@ -468,6 +470,7 @@ def filter_comp_plot(flags):
             fig, ax = plt.subplots(nrows=single_task_rows, ncols=single_task_cols,
                                    figsize=(single_task_cols * 3, single_task_rows * 2.5,),
                                    sharex=True, sharey=True)
+            max_value = 0
             for i in range(len(ax)):
                 for j in range(len(ax[i])):
                     if i * single_task_cols + j == len(current_data):
@@ -487,7 +490,22 @@ def filter_comp_plot(flags):
                             ax[i][j].plot(d, color=color_map(color), label=label)
                         ax[i][j].set_xticks(np.arange(data.shape[0]))
                         ax[i][j].grid(linestyle="dashed", linewidth="0.5", color="gray")
+                        max_value = max(max_value, data.max())
                     ax[i][j].set_title(list(current_data.keys())[i * single_task_cols + j])
+
+                    data_default = current_data[list(current_data.keys())[i * single_task_cols + j]]["default"]["mean"]
+                    data_optimal = current_data[list(current_data.keys())[i * single_task_cols + j]]["optimal"]["mean"]
+                    ratio = np.divide(data_default, data_optimal)
+                    """
+                    print("{} (with {}): mean = {}, std = {} ({})"
+                          .format(plot_titles[comp_choice] if comp_choice != "single_single" else plot_titles[comp_choice]
+                                  .format(list(mn for mn in single_task_names if mn not in current_data)[0]),
+                                  list(current_data.keys())[i * single_task_cols + j],
+                                  ratio.mean(), ratio.std(), list(ratio.mean(axis=0))))
+                    """
+
+            if not flags.plot_heatmaps:
+                plt.ylim((0, max_value * 1.1))
             fig.text(0.5, 0.04, "Model checkpoints throughout training", ha="center")
             fig.text(0.02, 0.5, "SSD ({}) between corresponding filters ({} match)"
                      .format(flags.plot_metric_type, flags.plot_match_type), va="center", rotation="vertical")
@@ -534,11 +552,7 @@ def _filter_comp(flags):
             original = np.reshape(filter_list[0][f_idx], (all_filters, filter_size))
             comparison = np.reshape(f, (all_filters, filter_size))
             distances = cdist(original, comparison, metric="sqeuclidean")
-            # print(distances.shape)
-            # TODO: search for matches only for corresponding in/out filters
-            #  => does this even make sense? if the input is going to be different anyway, not beyond the first layer...
 
-            # TODO: track changes between models over time => probably need to run on server, will take time
             row_idx, col_idx = linear_sum_assignment(distances)
             distance_sum = distances[row_idx, col_idx].sum()
             print("Total distance sum:", distance_sum)
@@ -548,7 +562,6 @@ def _filter_comp(flags):
             for r_idx, c_idx in zip(row_idx, col_idx):
                 ax.add_patch(Rectangle((r_idx, c_idx), 1, 1, fill=False, edgecolor="blue", lw=1))
             """
-            # sns.clustermap(distances, center=0)
             plt.show()
 
 
@@ -598,32 +611,22 @@ if __name__ == '__main__':
                         help="Filter to visualize (only in mode 'filter_vis').")
     parser.add_argument("--pairwise_comp", action="store_true",
                         help="Visualise difference between all pairwise filters, "
-                             "not just corresponding ones (only in mode 'filter_comp').")
+                             "not just corresponding ones (only in mode '_filter_comp').")
 
-    parser.add_argument("--match_num_models", action="store_true",
-                        help="...")
-    parser.add_argument("--comp_num_models", type=int, default=10,
-                        help="How many models...")
-    parser.add_argument("--comp_no_optimal", action="store_true",
-                        help="Whether to compute the optimal filter matching.")
+    # filter_comp parameters
+    parser.add_argument("--match_num_models", action="store_true")
+    parser.add_argument("--comp_num_models", type=int, default=10)
+    parser.add_argument("--comp_no_optimal", action="store_true")
     parser.add_argument("--comp_between", type=str, nargs="+", choices=comparison_choices,
-                        default=["single_multi", "single_multipop", "multi_multipop"],
-                        help="...")
-    parser.add_argument("--comp_single_single_model", type=str, default="Carnival", choices=single_task_names,
-                        help="...")
+                        default=["single_multi", "single_multipop", "multi_multipop"])
+    parser.add_argument("--comp_single_single_model", type=str, default="Carnival", choices=single_task_names)
 
-    parser.add_argument("--plot_match_type", type=str, default="default",
-                        choices=["default", "optimal"],
-                        help="Match between filters.")
-    parser.add_argument("--plot_metric_type", type=str, default="mean",
-                        choices=["mean", "sum"],
-                        help="Metric to use.")
-    parser.add_argument("--plot_heatmaps", action="store_true",
-                        help="...")
-    parser.add_argument("--save_figures", action="store_true",
-                        help="...")
-    parser.add_argument("--hide_plots", action="store_true",
-                        help="...")
+    # filter_comp_plot parameters
+    parser.add_argument("--plot_match_type", type=str, default="default", choices=["default", "optimal"])
+    parser.add_argument("--plot_metric_type", type=str, default="mean", choices=["mean", "sum"])
+    parser.add_argument("--plot_heatmaps", action="store_true")
+    parser.add_argument("--save_figures", action="store_true")
+    parser.add_argument("--hide_plots", action="store_true")
 
     # correct model params
     parser.add_argument("--frame_height", type=int, default=84,
