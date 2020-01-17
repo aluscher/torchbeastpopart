@@ -1,7 +1,8 @@
 # TorchBeastPopArt
-PopArt extension to TorchBeast, the PyTorch implementation of IMPALA.
+[PopArt](https://arxiv.org/abs/1809.04474) extension to [TorchBeast](https://github.com/facebookresearch/torchbeast), the PyTorch implementation of [IMPALA](https://github.com/deepmind/scalable_agent).
 
 # Experiments
+The PopArt extension was used to train a multi-task agent for six Atari games (AirRaid, Carnival, DemonAttack, Pong, SpaceInvaders, all with the NoFrameskip-v4 variant) and compared to the corresponding single-task agent and to a simpler mulit-task agent without PopArt normalisation. More details on these experiments can be found in the [report](results/report.pdf).
 
 ## Movies
 
@@ -26,6 +27,8 @@ Multi-task PopArt:
 ![Pong (Multi-task PopArt)](movies/MultiTaskPopart_300010240_PongNoFrameskip-v4.gif)
 ![SpaceInvaders (Multi-task PopArt)](movies/MultiTaskPopart_300010240_SpaceInvadersNoFrameskip-v4.gif)
 
+The different games plans learned by these three models, can be illustrated with the help of saliency maps (here red is the policy saliency and green is the baseline saliency). More details on these experiments can be found in the [report](results/report.pdf).
+
 Saliency:  
 ![AirRaid](movies/Saliency_AirRaidNoFrameskip-v4.gif)
 ![Carnival](movies/Saliency_CarnivalNoFrameskip-v4.gif)
@@ -45,7 +48,6 @@ Saliency:
 | Pong| PongNoFrameskip-v4 | 50 |
 | SpaceInvaders | SpaceInvadersNoFrameskip-v4 | 50 |
 | MultiTask | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 300 |
-| MultiTask3Games | Carnival,DemonAttack,AirRaid NoFrameskip-v4 | 100 |
 | MultiTaskPopArt | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 300 |
 
 
@@ -66,9 +68,9 @@ python -m torchbeast.polybeast --mode test_render --xpid MultiTaskPopArt --env P
 
 # Saliency
 ```bash
-python -m torchbeast.saliency --xpid MultiTask --env PongNoFrameskip-v4 --first_frame 0 --num_frames 100 --savedir=./models
+python -m torchbeast.saliency --xpid MultiTaskPopArt --env PongNoFrameskip-v4 --first_frame 0 --num_frames 100 --savedir=./models
 ```
-Note that compared to the original Saliency code, the extension does not produce a movie directly, but saves the frames as individual images. Animated gifs can subsequently produced with a simple Jupyter notebook.
+Note that compared to the original [saliency code](https://github.com/greydanus/visualize_atari), the extension does not produce a movie directly, but saves the frames as individual images. Animated gifs can subsequently be produced with a [Jupyter notebook](results/movies.ipynb).
 
 
 ## References
