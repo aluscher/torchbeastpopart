@@ -1,93 +1,80 @@
+# TorchBeastPopArt
+[PopArt](https://arxiv.org/abs/1809.04474) extension to [TorchBeast](https://github.com/facebookresearch/torchbeast), the PyTorch implementation of [IMPALA](https://github.com/deepmind/scalable_agent).
+
 # Experiments
+The PopArt extension was used to train a multi-task agent for six Atari games (AirRaid, Carnival, DemonAttack, Pong, SpaceInvaders, all with the NoFrameskip-v4 variant) and compared to the corresponding single-task agents and to a simpler mulit-task agent without PopArt normalisation. More details on these experiments can be found in the [report](results/report.pdf).
 
 ## Movies
 
 Single-task:  
-![AirRaid (Single-task)](movies/AirRaid_050009600_AirRaidNoFrameskip-v4.gif)
-![Carnival (Single-task)](movies/Carnival_050002560_CarnivalNoFrameskip-v4.gif)
-![DemonAttack (Single-task)](movies/DemonAttack_050001280_DemonAttackNoFrameskip-v4.gif)
-![Pong (Single-task)](movies/Pong_050013440_PongNoFrameskip-v4.gif)
-![SpaceInvaders (Single-task)](movies/SpaceInvaders_050001280_SpaceInvadersNoFrameskip-v4.gif)
+![AirRaid (Single-task clipped)](movies/AirRaid_050009600_AirRaidNoFrameskip-v4.gif)
+![Carnival (Single-task clipped)](movies/Carnival_050002560_CarnivalNoFrameskip-v4.gif)
+![DemonAttack (Single-task clipped)](movies/DemonAttack_050001280_DemonAttackNoFrameskip-v4.gif)
+![Pong (Single-task clipped)](movies/Pong_050013440_PongNoFrameskip-v4.gif)
+![SpaceInvaders (Single-task clipped)](movies/SpaceInvaders_050001280_SpaceInvadersNoFrameskip-v4.gif)
   
-Multi-task:  
-![AirRaid (Multi-task)](movies/MultiTask_300014720_AirRaidNoFrameskip-v4.gif)
-![Carnival (Multi-task)](movies/MultiTask_300014720_CarnivalNoFrameskip-v4.gif)
-![DemonAttack (Multi-task)](movies/MultiTask_300014720_DemonAttackNoFrameskip-v4.gif)
-![Pong (Multi-task)](movies/MultiTask_300014720_PongNoFrameskip-v4.gif)
-![SpaceInvaders (Multi-task)](movies/MultiTask_300014720_SpaceInvadersNoFrameskip-v4.gif)
+Multi-task (clipped):  
+![AirRaid (Multi-task clipped)](movies/MultiTask_300014720_AirRaidNoFrameskip-v4.gif)
+![Carnival (Multi-task clipped)](movies/MultiTask_300014720_CarnivalNoFrameskip-v4.gif)
+![DemonAttack (Multi-task clipped)](movies/MultiTask_300014720_DemonAttackNoFrameskip-v4.gif)
+![Pong (Multi-task clipped)](movies/MultiTask_300014720_PongNoFrameskip-v4.gif)
+![SpaceInvaders (Multi-task clipped)](movies/MultiTask_300014720_SpaceInvadersNoFrameskip-v4.gif)
   
-Popart:  
-![AirRaid (Popart)](movies/MultiTaskPopart_300010240_AirRaidNoFrameskip-v4.gif)
-![Carnival (Popart)](movies/MultiTaskPopart_300010240_CarnivalNoFrameskip-v4.gif)
-![DemonAttack (Popart)](movies/MultiTaskPopart_300010240_DemonAttackNoFrameskip-v4.gif)
-![Pong (Popart)](movies/MultiTaskPopart_300010240_PongNoFrameskip-v4.gif)
-![SpaceInvaders (Popart)](movies/MultiTaskPopart_300010240_SpaceInvadersNoFrameskip-v4.gif)
+Multi-task PopArt:  
+![AirRaid (Multi-task PopArt)](movies/MultiTaskPopart_300010240_AirRaidNoFrameskip-v4.gif)
+![Carnival (Multi-task PopArt)](movies/MultiTaskPopart_300010240_CarnivalNoFrameskip-v4.gif)
+![DemonAttack (Multi-task PopArt)](movies/MultiTaskPopart_300010240_DemonAttackNoFrameskip-v4.gif)
+![Pong (Multi-task PopArt)](movies/MultiTaskPopart_300010240_PongNoFrameskip-v4.gif)
+![SpaceInvaders (Multi-task PopArt)](movies/MultiTaskPopart_300010240_SpaceInvadersNoFrameskip-v4.gif)
+
+The different games plans learned by these three models, can be illustrated with the help of saliency maps (here red is the policy saliency and green is the baseline saliency). More details on these experiments can be found in the [report](results/report.pdf).
+
+Saliency:  
+![AirRaid](movies/Saliency_AirRaidNoFrameskip-v4.gif)
+![Carnival](movies/Saliency_CarnivalNoFrameskip-v4.gif)
+![DemonAttack](movies/Saliency_DemonAttackNoFrameskip-v4.gif)
+![Pong](movies/Saliency_PongNoFrameskip-v4.gif)
+![SpaceInvaders)](movies/Saliency_SpaceInvadersNoFrameskip-v4.gif)
 
 
 ## Trained models
 
-https://drive.google.com/file/d/1jqUEAWRCfyO-HodGl_PaQvOB6BvedTq6/view?usp=sharing
+| Name | Environments | Steps (millions) |
+| ---- |------------- | ---------------- |
+| AirRaid | AirRaidNoFrameskip-v4 | 50 |
+| Carnival | CarnivalNoFrameskip-v4  | 50 |
+| DemonAttack | DemonAttackNoFrameskip-v4 | 50 |
+| NameThisGame| ameThisGameNoFrameskip-v4 | 50 |
+| Pong| PongNoFrameskip-v4 | 50 |
+| SpaceInvaders | SpaceInvadersNoFrameskip-v4 | 50 |
+| MultiTask | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 300 |
+| MultiTaskPopArt | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 300 |
 
-| Name | Environments | Steps (millions) | Intermediate models |
-| ---- |------------- | ---------------- | ------------------- |
-| AirRaid | AirRaidNoFrameskip-v4 | 50 | yes |
-| AirRaid200 | AirRaidNoFrameskip-v4 | 200 | no |
-| Carnival | CarnivalNoFrameskip-v4  | 50 | yes |
-| Carnival200 | CarnivalNoFrameskip-v4  | 200 | no |
-| DemonAttack | DemonAttackNoFrameskip-v4 | 50 | yes |
-| NameThisGame| ameThisGameNoFrameskip-v4 | 50 | yes |
-| Pong| PongNoFrameskip-v4 | 50 | yes |
-| SpaceInvaders | SpaceInvadersNoFrameskip-v4 | 50 | yes |
-| MultiTask | AirRaid,Carnival,DemonAttack,NameThisGame,Pong,SpaceInvaders NoFrameskip-v4 | 200 | yes |
-| MultiTask3Games | Carnival,DemonAttack,AirRaid NoFrameskip-v4 | 100 | yes |
 
-## Architectural Choices
-
-| \# | Name | Pretrained Network | Games | Reward Clipping | Command |
-| --- | --- | ---------- | ----- | --------------- | --------- |
-| 1 | Single Agent | - | one for each? | no | |
-| 2 | Multi Agent w/o Reward Clipping | - | <ul><li>Air Raid</li><li>Carnival</li><li>Demon Attack</li><li>Space Invaders</li></ul> | no | |
-| 3 | Multi Agent w/ Reward Clipping | - | <ul><li>Air Raid</li><li>Carnival</li><li>Demon Attack</li><li>Space Invaders</li></ul> | yes | |
-
-## Transfer Learning
-
-| \# | Name | Pretrained Network | Games | Reward Clipping | Command |
-| --- | --- | ---------- | ----- | --------------- | --------- |
-| 4 | Transfer Learning Baseline | - | <ul><li>Name This Game</li></ul> | no | |
-| 5 | Transfer Learning Baseline | - | <ul><li>Pong</li></ul> | no | |
-| 6 | Transfer Learning Single Agent | 1 | <ul><li>Name This Game</li></ul> | no | |
-| 7 | Transfer Learning Single Agent | 1 | <ul><li>Pong</li></ul> | no | |
-| 8 | Transfer Learning Multi Agent | 3 | <ul><li>Name This Game</li></ul> | yes | |
-| 9 | Transfer Learning Multi Agent | 3 | <ul><li>Pong</li></ul> | yes | |
-
-# Test
+# Running the code
+# Training a model
 ```bash
-python -m torchbeast.polybeast --mode test --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
-python -m torchbeast.polybeast --mode test_render --xpid MultiTask --env PongNoFrameskip-v4 --savedir=./logs/torchbeast
+python -m torchbeast.polybeast --mode train --xpid MultiTaskPopArt --env AirRaidNoFrameskip-v4,CarnivalNoFrameskip-v4,DemonAttackNoFrameskip-v4,NameThisGameNoFrameskip-v4,PongNoFrameskip-v4,SpaceInvadersNoFrameskip-v4 --total_steps 50000000 --use_popart
+```
+There are th efollowing additional flags, as compared to the original TorchBeast implementation:
+- use_popart, to enable to PopArt extension
+- save_model_every_nsteps, to save intermediate models during training
+
+# Testing a model
+```bash
+python -m torchbeast.polybeast --mode test --xpid MultiTaskPopArt --env PongNoFrameskip-v4 --savedir=./models
+python -m torchbeast.polybeast --mode test_render --xpid MultiTaskPopArt --env PongNoFrameskip-v4 --savedir=./models
 ```
 
 # Saliency
 ```bash
-python -m torchbeast.saliency --xpid MultiTask --env PongNoFrameskip-v4 --resolution=75 --num_frames 5 --savedir=./logs/torchbeast
+python -m torchbeast.saliency --xpid MultiTaskPopArt --env PongNoFrameskip-v4 --first_frame 0 --num_frames 100 --savedir=./models
 ```
-
-# TorchBeast
-A PyTorch implementation of [IMPALA: Scalable Distributed
-Deep-RL with Importance Weighted Actor-Learner Architectures
-by Espeholt, Soyer, Munos et al.](https://arxiv.org/abs/1802.01561)
-
-TorchBeast comes in two variants:
-[MonoBeast](#getting-started-monobeast) and
-[PolyBeast](#faster-version-polybeast). While
-PolyBeast is more powerful (e.g. allowing training across machines),
-it's somewhat harder to install. MonoBeast requires only Python and
-PyTorch (we suggest using PyTorch version 1.2 or newer).
-
-For further details, see our [paper](https://arxiv.org/abs/1910.03552).
+Note that compared to the original [saliency code](https://github.com/greydanus/visualize_atari), the extension does not produce a movie directly, but saves the frames as individual images. Animated gifs can subsequently be produced with a [Jupyter notebook](results/movies.ipynb).
 
 
-## BibTeX
-
+## References
+TorchBeast
 ```
 @article{torchbeast2019,
   title={{TorchBeast: A PyTorch Platform for Distributed RL}},
@@ -98,252 +85,25 @@ For further details, see our [paper](https://arxiv.org/abs/1910.03552).
 }
 ```
 
-## Getting started: MonoBeast
-
-MonoBeast is a pure Python + PyTorch implementation of IMPALA.
-
-To set it up, create a new conda environment and install MonoBeast's
-requirements:
-
-```bash
-$ conda create -n torchbeast python=3.7
-$ conda activate torchbeast
-$ conda install pytorch -c pytorch
-$ pip install -r requirements.txt
+PopArt
+```
+@inproceedings{hessel2019,
+  title={Multi-task deep reinforcement learning with popart},
+  author={Hessel, Matteo and Soyer, Hubert and Espeholt, Lasse and Czarnecki, Wojciech and Schmitt, Simon and van Hasselt, Hado},
+  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume={33},
+  pages={3796--3803},
+  year={2019}
+}
 ```
 
-Then run MonoBeast, e.g. on the [Pong Atari
-environment](https://gym.openai.com/envs/Pong-v0/):
-
-```shell
-$ python -m torchbeast.monobeast --env PongNoFrameskip-v4
+Saliency
 ```
-
-By default, MonoBeast uses only a few actors (each with their instance
-of the environment). Let's change the default settings (try this on a
-beefy machine!):
-
-```shell
-$ python -m torchbeast.monobeast \
-     --env PongNoFrameskip-v4 \
-     --num_actors 45 \
-     --total_steps 30000000 \
-     --learning_rate 0.0004 \
-     --epsilon 0.01 \
-     --entropy_cost 0.01 \
-     --batch_size 4 \
-     --unroll_length 80 \
-     --num_buffers 60 \
-     --num_threads 4 \
-     --xpid example
+@article{greydanus2017visualizing,
+  title={Visualizing and Understanding Atari Agents},
+  author={Greydanus, Sam and Koul, Anurag and Dodge, Jonathan and Fern, Alan},
+  journal={arXiv preprint arXiv:1711.00138},
+  year={2017},
+  url={https://github.com/greydanus/visualize_atari},
+}
 ```
-
-Results are logged to `~/logs/torchbeast/latest` and a checkpoint file is
-written to `~/logs/torchbeast/latest/model.tar`.
-
-Once training finished, we can test performance on a few episodes:
-
-```shell
-$ python -m torchbeast.monobeast \
-     --env PongNoFrameskip-v4 \
-     --mode test \
-     --xpid example
-```
-
-MonoBeast is a simple, single-machine version of IMPALA.
-Each actor runs in a separate process with its dedicated instance of
-the environment and runs the PyTorch model on the CPU to create
-actions. The resulting rollout trajectories
-(environment-agent interactions) are sent to the learner. In the main
-process, the learner consumes these rollouts and uses them to update
-the model's weights.
-
-
-## Faster version: PolyBeast
-
-PolyBeast provides a faster and more scalable implementation of
-IMPALA.
-
-The easiest way to build and install all of PolyBeast's dependencies
-and run it is to use Docker:
-
-```shell
-$ docker build -t torchbeast .
-$ docker run --name torchbeast torchbeast
-```
-
-To run PolyBeast directly on Linux or MacOS, follow this guide.
-
-
-### Installing PolyBeast
-
-#### Linux
-
-Create a new Conda environment, and install PolyBeast's requirements:
-
-```shell
-$ conda create -n torchbeast python=3.7
-$ conda activate torchbeast
-$ pip install -r requirements.txt
-```
-
-PolyBeast requires installing PyTorch
-[from source](https://github.com/pytorch/pytorch#from-source).
-
-PolyBeast also requires gRPC, which can be installed by running:
-
-```shell
-$ git submodule update --init --recursive
-$ conda install -c anaconda protobuf
-$ ./scripts/install_grpc.sh
-```
-
-Finally, let's compile the C++ parts of PolyBeast:
-
-```
-$ pip install nest/
-$ export LD_LIBRARY_PATH=${CONDA_PREFIX:-"$(dirname $(which conda))/../"}/lib:${LD_LIBRARY_PATH}
-$ python setup.py install
-```
-
-#### MacOS
-
-Create a new Conda environment, and install PolyBeast's requirements:
-
-```shell
-$ conda create -n torchbeast python=3.7
-$ conda activate torchbeast
-$ pip install -r requirements.txt
-```
-
-On MacOS, we can use homebrew to install gRPC:
-
-```shell
-$ brew install grpc
-```
-
-PyTorch can be installed as per its
-[website](https://pytorch.org/get-started/locally/) (select Conda and
-Python 3.7).
-
-Compile and install the C++ parts of PolyBeast:
-
-```
-$ pip install nest/
-$ TORCHBEAST_LIBS_PREFIX=/usr/local CXX=c++ python setup.py install
-```
-
-### Running PolyBeast
-
-To start both the environment servers and the learner process, run
-
-```shell
-$ python -m torchbeast.polybeast
-```
-
-The environment servers can also be started separately:
-
-```shell
-python -m torchbeast.polybeast_env --num_servers 10
-```
-
-Start another terminal and run:
-
-```shell
-$ python -m torchbeast.polybeast --no_start_servers
-```
-
-
-## (Very rough) overview of the system
-
-```
-|-----------------|     |-----------------|                  |-----------------|
-|     ACTOR 1     |     |     ACTOR 2     |                  |     ACTOR n     |
-|-------|         |     |-------|         |                  |-------|         |
-|       |  .......|     |       |  .......|     .   .   .    |       |  .......|
-|  Env  |<-.Model.|     |  Env  |<-.Model.|                  |  Env  |<-.Model.|
-|       |->.......|     |       |->.......|                  |       |->.......|
-|-----------------|     |-----------------|                  |-----------------|
-   ^     I                 ^     I                              ^     I
-   |     I                 |     I                              |     I Actors
-   |     I rollout         |     I rollout               weights|     I send
-   |     I                 |     I                     /--------/     I rollouts
-   |     I          weights|     I                     |              I (frames,
-   |     I                 |     I                     |              I  actions
-   |     I                 |     v                     |              I  etc)
-   |     L=======>|--------------------------------------|<===========J
-   |              |.........      LEARNER                |
-   \--------------|..Model.. Consumes rollouts, updates  |
-     Learner      |.........       model weights         |
-      sends       |--------------------------------------|
-     weights
-```
-
-The system has two main components, actors and a learner.
-
-Actors generate rollouts (tensors from a number of steps of
-environment-agent interactions, including environment frames, agent
-actions and policy logits, and other data).
-
-The learner consumes that experience, computes a loss and updates the
-weights. The new weights are then propagated to the actors.
-
-
-## Learning curves on Atari
-
-We ran TorchBeast on Atari, using the same hyperparamaters and neural
-network as in the [IMPALA
-paper](https://arxiv.org/abs/1802.01561). For comparison, we also ran
-the [open source TensorFlow implementation of
-IMPALA](https://github.com/deepmind/scalable_agent), using the [same
-environment
-preprocessing](https://github.com/heiner/scalable_agent/releases/tag/gym). The
-results are equivalent; see our paper for details.
-
-![deep_network](./plot.png)
-
-
-## Repository contents
-
-`libtorchbeast`: C++ library that allows efficient learner-actor
-communication via queueing and batching mechanisms. Some functions are
-exported to Python using pybind11. For PolyBeast only.
-
-`nest`: C++ library that allows to manipulate complex
-nested structures. Some functions are exported to Python using
-pybind11.
-
-`tests`: Collection of python tests.
-
-`third_party`: Collection of third-party dependencies as Git
-submodules. Includes [gRPC](https://grpc.io/).
-
-`torchbeast`: Contains `monobeast.py`, and `polybeast.py` and
-`polybeast_env.py`.
-
-
-## Hyperparamaters
-
-Both MonoBeast and PolyBeast have flags and hyperparameters. To
-describe a few of them:
-
-* `num_actors`: The number of actors (and environment instances). The
-  optimal number of actors depends on the capabilities of the machine
-  (e.g. you would not have 100 actors on your laptop). In default
-  PolyBeast this should match the number of servers started.
-* `batch_size`: Determines the size of the learner inputs.
-* `unroll_length`: Length of a rollout (i.e., number of steps that an
-  actor has to be perform before sending its experience to the
-  learner). Note that every batch will have dimensions
-  `[unroll_length, batch_size, ...]`.
-
-
-## Contributing
-
-We would love to have you contribute to TorchBeast or use it for your
-research. See the [CONTRIBUTING.md](CONTRIBUTING.md) file for how to help
-out.
-
-## License
-
-TorchBeast is released under the Apache 2.0 license.

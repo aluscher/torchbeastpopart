@@ -91,7 +91,7 @@ def rollout(model, env, max_ep_len=3e3, actions=None):
         while not done and episode_length <= max_ep_len:
             agent_outputs = model(observation, torch.tensor)
             policy_outputs, core_state = agent_outputs
-            action = policy_outputs[0] if actions is None else torch.tensor(actions[episode_length])
+            action = policy_outputs[0] if len(actions) == 0 else torch.tensor(actions[episode_length])
             observation = env.step(action)
             done = observation["done"]
 
