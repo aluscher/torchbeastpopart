@@ -94,7 +94,7 @@ parser.add_argument("--use_popart", action="store_true",
                     help="Use PopArt Layer.")
 
 # Loss settings.
-parser.add_argument("--entropy_cost", default=0.0006, type=float,
+parser.add_argument("--entropy_cost", default=0.01, type=float, # 0.0006
                     help="Entropy cost/multiplier.")
 parser.add_argument("--baseline_cost", default=0.5, type=float,
                     help="Baseline cost/multiplier.")
@@ -105,7 +105,7 @@ parser.add_argument("--reward_clipping", default="abs_one",
                     help="Reward clipping.")
 
 # Optimizer settings.
-parser.add_argument("--learning_rate", default=0.00048, type=float,
+parser.add_argument("--learning_rate", default=0.00048, type=float,   # 0.0006
                     metavar="LR", help="Learning rate.")
 parser.add_argument("--alpha", default=0.99, type=float,
                     help="RMSProp smoothing constant.")
