@@ -1,3 +1,4 @@
+pillow
 tabulate
 tqdm
 scipy

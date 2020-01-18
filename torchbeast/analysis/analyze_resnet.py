@@ -615,7 +615,8 @@ if __name__ == '__main__':
     # filter_comp parameters
     parser.add_argument("--match_num_models", action="store_true",
                         help="When comparing between single-task and multi-task models, compare between models "
-                             "trained for the same number of steps instead of percentage of training time.")
+                             "trained for the same number of steps instead of percentage of training time. "
+                             "(NOTE: currently not properly implemented)")
     parser.add_argument("--comp_num_models", type=int, default=10,
                         help="Number of model checkpoints to load and to compare.")
     parser.add_argument("--comp_no_optimal", action="store_true",
